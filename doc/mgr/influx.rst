@@ -9,48 +9,44 @@ Some default counters are already set. However, users will have the option to ch
 Configuration 
 -------------
 
-In order for this module to work, the following configuration should be created ``/etc/ceph/influx.conf``.
+In order for this module to work, configuration keys must be set ``ceph config-key set <key> <value>``. 
 
 ^^^^^^^^
 Required 
 ^^^^^^^^
 
-The configurations must include the following under the header ``[influx]``.
+The following configuration keys are required:
 
-:Configuration: **Description**
-:interval: Sets how often the module will collect the stats and send it to influx
-:hostname: Influx host
-:username: Influx username
-:password: Influx password
-:database: Influx database (if a database does not already exist in influx, the module will create one)
-:port: Influx port 
-:stats: Stats about the osd, pool, and cluster can be collected. Specify as many as you would like, but seperate each type by a comma.
+- mgr/influx/influx_configs
+
+    Since this module may be running on more than one host, this configuration takes the hostname, username, and password for each host. It also has the ability to take in more than one host at a time. 
+    Example:
+
+    ``ceph config-set influx_configs  [{host1,username1,password1},{host2,username2,password2},{host3,username3,password3}]``
+
+
+
+- mgr/influx/interval 
+
+- mgr/influx/stats
+
+    Users have the ability to collect stats about either the osd, cluster, or pool. If more than one stat is desired, separate each additional stat with a comma. 
+    Example:
+
+    ``ceph config-set stats osd,cluster,pool``
+
+- mgr/influx/ports
 
 
 ^^^^^^^^
 Optional 
 ^^^^^^^^
 
-Users have the ability to collect additional counters for each osd or each cluster under the the header ``[extended]``.
-More information on the extended option can be found below under the *extended* section. Seperate each additional configurations with a comma.  
+Users have the ability to collect additional counters for each osd or each cluster by adding a list of counters under the following configuration key:
 
-Example config file:
+- mgr/influx/extended_cluster 
 
-::
-
-    [influx]
-        interval = 10
-        hostname = samplehost
-        username = admin
-        password = pass 
-        database = default 
-        port = 8086 
-        stats = osd, pool, cluster
-
-    [extended]
-        osd = op_latency, recovery_ops
-        cluster = op_latency
-
+- mgr/influx/extended_osd
 --------
 Enabling 
 --------
@@ -74,7 +70,7 @@ Disabling
 Debugging 
 ---------
 
-By default, a few debugging statments as well as error statements have been set to print in the log files. Users can add more if necessary.
+By default, a few debugging statements as well as error statements have been set to print in the log files. Users can add more if necessary.
 To make use of the debugging option in the module:
 
 - Add this to the ceph.conf file.::
