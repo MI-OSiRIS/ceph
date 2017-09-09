@@ -16,6 +16,18 @@ class Module(MgrModule):
             "desc": "debug the module",
             "perm": "rw"  
         },
+
+        {   "cmd": "influx config-set name=key,type=CephString "
+                "name=value,type=CephString",
+            "desc": "Set a configuration value",
+            "perm": "rw"
+        },
+        
+        {   "cmd": "influx config-show",
+            "desc": "Show configuration value",
+            "perm": "r"
+
+        }
     ]
 
 
@@ -152,42 +164,60 @@ class Module(MgrModule):
         else:
             return data 
 
-    def send_to_influx(self):
-        config = SafeConfigParser()
-        config.read('/etc/ceph/influx.conf')
-        host = config.get('influx','hostname')
-        username = config.get('influx', 'username')
-        password = config.get('influx', 'password')
-        database = config.get('influx', 'database')
-        port = int(config.get('influx','port'))
-        stats = config.get('influx', 'stats').replace(' ', '').split(',')
-        client = InfluxDBClient(host, port, username, password, database) 
+    
+
+def send_to_all_host(self):
+    influx_configs = json.loads(self.get_config("influx_configs"))
+    if type(influx_configs) == "list":
+        for config in influx_configs:
+            host = influx_configs["hostname"]
+            if len(config) > 1:
+                username = config["username"]
+                password = config["password"]
+            else:
+                username = ""
+                password = ""
+            self.send_to_influxdb(host,username,password)    
+    else:
+        host = influx_configs["hostname"]
+        if len(influx_configs) > 1:
+            username = influx_configs["username"]
+            password = influx_configs["password"]
+        else:
+            username = ""
+            password = ""
+        self.send_to_influxdb(host,username,password)
+
+    
+    def send_to_influxdb(self,host, username, password):
+        client = InfluxDBClient(host, self.get_config("port"), username, password, self.get_config("database")) 
         databases_avail = client.get_list_database()
         default_stats = self.get_default_stat()
+        database = self.get_config("database")
+        stats = self.get_config("stats")
+        extended_osd = self.get_config("extended_osd")
+        extended_cluster = self.get_config("extended_cluster")
         for database_avail in databases_avail:
             if database_avail == database: 
                 break
             else: 
                 client.create_database(database)
-
-        
-
         for stat in stats:
             if stat == "pool": 
                 client.write_points(self.get_df_stats(), 'ms')
 
             elif stat == "osd":
                 client.write_points(default_stats[0], 'ms')
-                if config.has_option('extended', 'osd'):
-                    osds = config.get('extended', 'osd').replace(' ', '').split(',')
+                if extended_osd != "":
+                    osds = extended_osd.replace(' ', '').split(',')
                     for osd in osds:
                         client.write_points(self.get_extended("osd", osd), 'ms')
                 self.log.debug("wrote osd stats")
 
             elif stat == "cluster": 
                 client.write_points(default_stats[-1], 'ms')
-                if config.has_option('extended', 'cluster'):
-                    clusters = config.get('extended', 'cluster').replace(' ', '').split(',')
+                if extended_cluster != "":
+                    clusters = extended_cluster.replace(' ', '').split(',')
                     for cluster in clusters:
                         client.write_points(self.get_extended("cluster", cluster), 'ms')
                 self.log.debug("wrote cluster stats")
@@ -200,22 +230,37 @@ class Module(MgrModule):
         self.event.set()
 
     def handle_command(self, cmd):
-        if cmd['prefix'] == 'influx self-test':
-            self.send_to_influx()
-            return 0,' ', 'debugging module'
+        if command['prefix'] == 'influx config-show':
+            return 0, json.dumps(self.config), ''
+        
+        elif command['prefix'] == 'influx config-set':
+            key = command['key']
+            value = command['value']
+            if not value:
+                return -errno.EINVAL, '', 'Value should not be empty or None'
+            
+            self.log.debug('Setting configuration option %s to %s', key, value)
+            self.set_localized_config(key, value)
+            return 0, 'Configuration option {0} updated'.format(key), ''
+
+        elif command['prefix'] == 'influx self-test':
+            self.send_to_all_host()
+            return 0, 'Self-test succeeded', ''
+
         else:
-            print('not found')
-            raise NotImplementedError(cmd['prefix'])
+            return (-errno.EINVAL, '',
+                    "Command not found '{0}'".format(command['prefix']))
 
     def serve(self):
         self.log.info('Starting influx module')
         self.run = True
-        config = SafeConfigParser()
-        config.read('/etc/ceph/influx.conf')
         while self.run:
-            self.send_to_influx()
-            self.log.debug("Running interval loop")
-            interval = int(config.get('influx','interval'))
+            self.send_to_all_host()
+            self.log.debug("Running interval loop")  
+            interval = int(self.get_config("interval"))
             self.log.debug("sleeping for %d seconds",interval)
             self.event.wait(interval)
-            
+
+        
+
+
