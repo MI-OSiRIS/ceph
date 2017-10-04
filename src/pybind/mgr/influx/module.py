@@ -5,8 +5,13 @@ import sys
 from threading import Event
 import time
 from ConfigParser import SafeConfigParser
-from influxdb import InfluxDBClient
 from mgr_module import MgrModule
+
+try:
+    from influxdb import InfluxDBClient
+    from influxdb.exceptions import InfluxDBClientError
+except ImportError:
+    InfluxDBClient = None
 
 class Module(MgrModule):
     
@@ -16,26 +21,33 @@ class Module(MgrModule):
             "desc": "debug the module",
             "perm": "rw"  
         },
-
-        {   "cmd": "influx config-set name=key,type=CephString "
-                "name=value,type=CephString",
-            "desc": "Set a configuration value",
-            "perm": "rw"
-        },
-        
-        {   "cmd": "influx config-show",
-            "desc": "Show configuration value",
-            "perm": "r"
-
-        }
     ]
 
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs): 
         super(Module, self).__init__(*args, **kwargs)
         self.event = Event()
-        self.run = True 
+        self.run = True
 
+        # module-specific config init
+        config = SafeConfigParser()
+        config.read('/etc/ceph/influx.conf')
+        self.clients = []
+        self.hosts = config.get('influx','hostname').replace(' ', '').split(',')
+        self.username = config.get('influx', 'username')
+        self.password = config.get('influx', 'password')
+        self.database = config.get('influx', 'database')
+        self.port = int(config.get('influx','port'))
+        self.stats = config.get('influx', 'stats').replace(' ', '').split(',')
+        self.interval = int(config.get('influx','interval'))
+
+        if config.has_option('extended', 'osd'):
+            self.osds = config.get('extended', 'osd').replace(' ', '').split(',')
+
+        if config.has_option('extended', 'cluster'):
+            self.clusters = config.get('extended', 'cluster').replace(' ', '').split(',')
+
+        self.init_clients() 
 
     def get_latest(self, daemon_type, daemon_name, stat):
         data = self.get_counter(daemon_type, daemon_name, stat)[stat]
@@ -95,11 +107,12 @@ class Module(MgrModule):
                 osd_id = osd['osd']
                 metadata = self.get_metadata('osd', "%s" % osd_id)
                 value += self.get_latest("osd", str(osd_id), "osd."+ str(default))
+                if value == 0:
+                    continue
                 point = {
-                    "measurement": "ceph_osd_stats",
+                    "measurement": "ceph_daemon_stats",
                     "tags": {
-                        "mgr_id": self.get_mgr_id(),
-                        "osd_id": osd_id,
+                        "ceph_daemon": "osd." + str(osd_id),
                         "type_instance": default,
                         "host": metadata['hostname']
                     },
@@ -109,21 +122,21 @@ class Module(MgrModule):
                         }
                 }
                 osd_data.append(point)
-            point2 = {
-                "measurement": "ceph_cluster_stats",
-                "tags": {
-                    "mgr_id": self.get_mgr_id(),
-                    "type_instance": default,
-                },
-                    "time" : datetime.utcnow().isoformat() + 'Z',
-                    "fields" : {
-                        "value": value 
-                    }
-            }
-            cluster_data.append(point2)
-        return osd_data, cluster_data
 
-        
+            if value > 0: 
+                point2 = {
+                    "measurement": "ceph_cluster_stats",
+                    "tags": {
+                        "mgr_id": self.get_mgr_id(),
+                        "type_instance": default,
+                    },
+                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "fields" : {
+                            "value": value 
+                        }
+                }
+                cluster_data.append(point2)
+        return osd_data, cluster_data
 
     def get_extended(self, counter_type, type_inst):
         path = "osd." + type_inst.__str__()
@@ -133,12 +146,15 @@ class Module(MgrModule):
         for osd in osdmap['osds']: 
             osd_id = osd['osd']
             metadata = self.get_metadata('osd', "%s" % osd_id)
-            value += self.get_latest("osd", osd_id.__str__(), path.__str__())
+            # this method returns 0 if no data was found, continue and don't build a data point if so
+            value += self.get_latest("osd", osd_id.__str__(), path.__str__()) 
+            if value == 0:
+                continue
+            
             point = {
-                "measurement": "ceph_osd_stats",
+                "measurement": "ceph_daemon_stats",
                 "tags": {
-                    "mgr_id": self.get_mgr_id(),
-                    "osd_id": osd_id,
+                    "ceph_daemon": "osd." + str(osd_id),
                     "type_instance": type_inst,
                     "host": metadata['hostname']
                 },
@@ -149,80 +165,72 @@ class Module(MgrModule):
             }
             data.append(point)
         if counter_type == "cluster":
-            point = [{
-                "measurement": "ceph_cluster_stats",
-                "tags": {
-                    "mgr_id": self.get_mgr_id(),
-                    "type_instance": type_inst,
-                },
-                    "time" : datetime.utcnow().isoformat() + 'Z',
-                    "fields" : {
-                        "value": value 
-                    }
-            }]
-            return point 
+            if value == 0:
+                return []
+            else:
+                point = [{
+                    "measurement": "ceph_cluster_stats",
+                    "tags": {
+                        "mgr_id": self.get_mgr_id(),
+                        "type_instance": type_inst,
+                    },
+                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "fields" : {
+                            "value": value 
+                        }
+                }]
+                return point 
         else:
             return data 
 
-    
+    # we are intentionally coding in the assumption that every database host is using the same user,port, database, etc
+    # if that were not true it would be necessary to build a more complex list of dictionaries or a set of indexed lists 
+    def init_clients(self):
+        self.clients = []
+        for host in self.hosts:
+            c = InfluxDBClient(host, self.port, self.username, self.password, self.database) 
+            self.clients.append(c)  
 
-def send_to_all_host(self):
-    influx_configs = json.loads(self.get_config("influx_configs"))
-    if type(influx_configs) == "list":
-        for config in influx_configs:
-            host = influx_configs["hostname"]
-            if len(config) > 1:
-                username = config["username"]
-                password = config["password"]
-            else:
-                username = ""
-                password = ""
-            self.send_to_influxdb(host,username,password)    
-    else:
-        host = influx_configs["hostname"]
-        if len(influx_configs) > 1:
-            username = influx_configs["username"]
-            password = influx_configs["password"]
-        else:
-            username = ""
-            password = ""
-        self.send_to_influxdb(host,username,password)
-
-    
-    def send_to_influxdb(self,host, username, password):
-        client = InfluxDBClient(host, self.get_config("port"), username, password, self.get_config("database")) 
-        databases_avail = client.get_list_database()
+    def query_datapoints(self):
         default_stats = self.get_default_stat()
-        database = self.get_config("database")
-        stats = self.get_config("stats")
-        extended_osd = self.get_config("extended_osd")
-        extended_cluster = self.get_config("extended_cluster")
-        for database_avail in databases_avail:
-            if database_avail == database: 
-                break
-            else: 
-                client.create_database(database)
-        for stat in stats:
+        # pg_s = self.get('pg_summary')
+
+        # self.log.info(pg_s)
+
+        for stat in self.stats:
             if stat == "pool": 
-                client.write_points(self.get_df_stats(), 'ms')
+                self.send_to_influx(self.get_df_stats())
 
             elif stat == "osd":
-                client.write_points(default_stats[0], 'ms')
-                if extended_osd != "":
-                    osds = extended_osd.replace(' ', '').split(',')
-                    for osd in osds:
-                        client.write_points(self.get_extended("osd", osd), 'ms')
+                self.send_to_influx(default_stats[0])
+                
+                for osd in self.osds:
+                    self.send_to_influx(self.get_extended("osd", osd))
                 self.log.debug("wrote osd stats")
 
             elif stat == "cluster": 
-                client.write_points(default_stats[-1], 'ms')
-                if extended_cluster != "":
-                    clusters = extended_cluster.replace(' ', '').split(',')
-                    for cluster in clusters:
-                        client.write_points(self.get_extended("cluster", cluster), 'ms')
+                self.send_to_influx(default_stats[-1])
+                
+                for cluster in self.clusters:
+                    self.send_to_influx(self.get_extended("cluster", cluster))
+
                 self.log.debug("wrote cluster stats")
             else:
                 self.log.error("invalid stat")
+
+    def send_to_influx(self, points, resolution='ms'):
+        if len(points) > 0:        
+            # catch the not found exception and inform the user, try to create db if we can
+            try:
+                for client in self.clients:
+                    client.write_points(points, resolution)
+            except InfluxDBClientError as e:
+                if e.code == 404:
+                    self.log.info("Database '{0}' not found, trying to create (requires admin privs).  You can also create manually and grant write privs to user '{1}'".format(database,username))
+                    client.create_database(database)
+                else:
+                    raise
+
 
     def shutdown(self):
         self.log.info('Stopping influx module')
@@ -230,37 +238,23 @@ def send_to_all_host(self):
         self.event.set()
 
     def handle_command(self, cmd):
-        if command['prefix'] == 'influx config-show':
-            return 0, json.dumps(self.config), ''
-        
-        elif command['prefix'] == 'influx config-set':
-            key = command['key']
-            value = command['value']
-            if not value:
-                return -errno.EINVAL, '', 'Value should not be empty or None'
-            
-            self.log.debug('Setting configuration option %s to %s', key, value)
-            self.set_localized_config(key, value)
-            return 0, 'Configuration option {0} updated'.format(key), ''
-
-        elif command['prefix'] == 'influx self-test':
-            self.send_to_all_host()
-            return 0, 'Self-test succeeded', ''
-
+        if cmd['prefix'] == 'influx self-test':
+            self.send_to_influx()
+            return 0,' ', 'debugging module'
         else:
-            return (-errno.EINVAL, '',
-                    "Command not found '{0}'".format(command['prefix']))
+            print('not found')
+            raise NotImplementedError(cmd['prefix'])
 
     def serve(self):
+        if InfluxDBClient is None:
+            self.log.error("Cannot transmit statistics: influxdb python "
+                           "module not found.  Did you install it?")
+            return
         self.log.info('Starting influx module')
         self.run = True
         while self.run:
-            self.send_to_all_host()
-            self.log.debug("Running interval loop")  
-            interval = int(self.get_config("interval"))
-            self.log.debug("sleeping for %d seconds",interval)
-            self.event.wait(interval)
-
-        
-
-
+            self.query_datapoints()
+            self.log.debug("Running interval loop")
+            self.log.debug("sleeping for %d seconds",self.interval)
+            self.event.wait(self.interval)
+            
