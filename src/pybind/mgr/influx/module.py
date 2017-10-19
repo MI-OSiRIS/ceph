@@ -295,3 +295,31 @@ class Module(MgrModule):
         self.event.set()
 
     def handle_command(self, cmd):
+        if cmd['prefix'] == 'influx self-test':
+            df_stat = self.get_df_stats()
+            self.send_to_influx(df_stat[0])
+            self.send_to_influx(self.get_osd_stats())
+            self.send_to_influx(self.get_pg_summary(df_stat[1]))
+            return 0,' ', 'debugging module'
+        else:
+            print('not found')
+            raise NotImplementedError(cmd['prefix'])
+
+    def serve(self):
+        if InfluxDBClient is None:
+            self.log.error("Cannot transmit statistics: influxdb python "
+                           "module not found.  Did you install it?")
+            return
+        self.log.info('Starting influx module')
+        # delay startup 10 seconds, otherwise first few queries return no info
+        self.event.wait(10)
+        while self.run:
+            df_stat = self.get_df_stats()
+            self.send_to_influx(df_stat[0])
+            self.send_to_influx(self.get_osd_stats())
+            self.send_to_influx(self.get_pg_summary(df_stat[1]))
+            self.log.debug("Running interval loop")
+            self.log.debug("sleeping for %d seconds",self.interval)
+            self.event.wait(self.interval)
+            
+      
