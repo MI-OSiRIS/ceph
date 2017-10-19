@@ -123,7 +123,7 @@ class Module(MgrModule):
             'quota_objects',
             'quota_bytes'
         ]
-        
+
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -159,7 +159,7 @@ class Module(MgrModule):
                         "type_instance": stat,
                         "host": metadata['hostname']
                     },
-                    "time" : time, 
+                    "time" : time,
                     "fields" : {
                         "value": stats[stat]
                     }
@@ -180,7 +180,7 @@ class Module(MgrModule):
                     }
                 }
                 data.append(point_2)
-        return data 
+        return data
 
 
     def get_daemon_stats(self):
