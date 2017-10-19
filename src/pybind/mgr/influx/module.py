@@ -66,7 +66,7 @@ class Module(MgrModule):
         ]
 
         mgr_id = self.get_mgr_id()
-
+        pool_info = {}
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -83,7 +83,9 @@ class Module(MgrModule):
                         }
                 }
                 data.append(point)
-        return data
+                pool_info.update({str(pool['id']):pool['name']})
+        
+        return data, pool_info
 
 
     def get_osd_stats(self):
@@ -131,6 +133,46 @@ class Module(MgrModule):
 
     # we are intentionally coding in the assumption that every database host is using the same user,port, database, etc
     # if that were not true it would be necessary to build a more complex list of dictionaries or a set of indexed lists 
+    def get_pg_summary(self, pool_info):
+        osd_sum = self.get('pg_summary')['by_osd']
+        pool_sum = self.get('pg_summary')['by_pool']
+        mgr_id = self.get_mgr_id()
+        data = []
+        for osd_id, stats in osd_sum.iteritems():
+            metadata = self.get_metadata('osd', "%s" % osd_id)
+            for stat in stats:
+                point_1 = {
+                    "measurement": "ceph_osd_summary",
+                        "tags": {
+                            "ceph_daemon": "osd." + str(osd_id),
+                            "type_instance": stat,
+                            "host": metadata['hostname']
+                        },
+                            "time" : datetime.utcnow().isoformat() + 'Z', 
+                            "fields" : {
+                                "value": stats[stat]
+                            }
+                }
+                data.append(point_1)
+        for pool_id, stats in pool_sum.iteritems():
+            for stat in stats:
+                point_2 = {
+                    "measurement": "ceph_pool_stats",
+                    "tags": {
+                        "pool_name" : pool_info[pool_id],
+                        "pool_id" : pool_id,
+                        "type_instance" : stat,
+                        "mgr_id" : mgr_id,
+                    },
+                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "fields": {
+                            "value" : stats[stat],
+                        }
+                }
+                data.append(point_2)
+        return data 
+
+        
     def init_clients(self):
         self.clients = []
         for host in self.hosts:
@@ -157,7 +199,10 @@ class Module(MgrModule):
 
     def handle_command(self, cmd):
         if cmd['prefix'] == 'influx self-test':
-            self.send_to_influx()
+            df_stat = self.get_df_stats()
+            self.send_to_influx(df_stat[0])
+            self.send_to_influx(self.get_osd_stats())
+            self.send_to_influx(self.get_pg_summary(df_stat[1]))
             return 0,' ', 'debugging module'
         else:
             print('not found')
@@ -172,9 +217,12 @@ class Module(MgrModule):
         # delay startup 10 seconds, otherwise first few queries return no info
         self.event.wait(10)
         while self.run:
-            self.send_to_influx(self.get_df_stats())
+            df_stat = self.get_df_stats()
+            self.send_to_influx(df_stat[0])
             self.send_to_influx(self.get_osd_stats())
+            self.send_to_influx(self.get_pg_summary(df_stat[1]))
             self.log.debug("Running interval loop")
             self.log.debug("sleeping for %d seconds",self.interval)
             self.event.wait(self.interval)
             
+      
