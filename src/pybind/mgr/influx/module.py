@@ -1,9 +1,5 @@
-from collections import defaultdict
 from datetime import datetime
-import json
-import sys
 from threading import Event
-import time
 from ConfigParser import SafeConfigParser
 from mgr_module import MgrModule
 
@@ -37,24 +33,22 @@ class Module(MgrModule):
         self.username = config.get('influx', 'username')
         self.password = config.get('influx', 'password')
         self.database = config.get('influx', 'database')
-        self.port = int(config.get('influx','port'))
-        self.stats = config.get('influx', 'stats').replace(' ', '').split(',')
-        self.interval = int(config.get('influx','interval'))
+        self.port = config.getint('influx','port')
+        self.interval = config.getint('influx','interval')
 
         if config.has_option('extended', 'osd'):
-            self.osds = config.get('extended', 'osd').replace(' ', '').split(',')
-
-        if config.has_option('extended', 'cluster'):
-            self.clusters = config.get('extended', 'cluster').replace(' ', '').split(',')
+            self.extended = config.get('extended', 'osd').replace(' ', '').split(',')
 
         self.init_clients() 
 
+    # returns 2 element list of unix timestamp and counter value
+    # example: [1508349272L, 63421644240L] 
     def get_latest(self, daemon_type, daemon_name, stat):
         data = self.get_counter(daemon_type, daemon_name, stat)[stat]
         if data:
             return data[-1][1]
         else:
-            return 0
+            return None
 
 
     def get_df_stats(self):
@@ -71,6 +65,8 @@ class Module(MgrModule):
             'max_avail'
         ]
 
+        mgr_id = self.get_mgr_id()
+
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -79,7 +75,7 @@ class Module(MgrModule):
                         "pool_name" : pool['name'],
                         "pool_id" : pool['id'],
                         "type_instance" : df_type,
-                        "mgr_id" : self.get_mgr_id(),
+                        "mgr_id" : mgr_id,
                     },
                         "time" : datetime.utcnow().isoformat() + 'Z',
                         "fields": {
@@ -90,98 +86,48 @@ class Module(MgrModule):
         return data
 
 
-    def get_default_stat(self):
-        defaults= [ 
+    def get_osd_stats(self):
+        defaults = [ 
             "op_w",
             "op_in_bytes",
             "op_r",
             "op_out_bytes"
         ]
 
+        stats = defaults + self.extended
+       
         osd_data = []
-        cluster_data = []
-        for default in defaults:
-            osdmap = self.get("osd_map")['osds']
-            value = 0
+        for stat in stats:
+            osdmap = self.get("osd_map")['osds'] 
             for osd in osdmap:
                 osd_id = osd['osd']
                 metadata = self.get_metadata('osd', "%s" % osd_id)
-                value += self.get_latest("osd", str(osd_id), "osd."+ str(default))
-                if value == 0:
+            
+                #if osd_id == 10 and stat == 'op_in_bytes':
+                    #test = self.get_counter("osd", str(osd_id), "osd."+ str(stat))
+                    #self.log.error(test)
+                stat_val = self.get_latest("osd", str(osd_id), "osd."+ str(stat))
+
+                if not stat_val:
                     continue
+
+                #if stat_val == 0 and stat == 'recovery_ops':
+                #    self.log.error("OSD {0} returned 0 value for stat {1}".format(osd_id, stat))
+                #    continue
                 point = {
                     "measurement": "ceph_daemon_stats",
                     "tags": {
                         "ceph_daemon": "osd." + str(osd_id),
-                        "type_instance": default,
+                        "type_instance": stat,
                         "host": metadata['hostname']
                     },
                         "time" : datetime.utcnow().isoformat() + 'Z', 
                         "fields" : {
-                            "value": self.get_latest("osd", osd_id.__str__(), "osd."+ default.__str__())
+                            "value": stat_val
                         }
                 }
                 osd_data.append(point)
-
-            if value > 0: 
-                point2 = {
-                    "measurement": "ceph_cluster_stats",
-                    "tags": {
-                        "mgr_id": self.get_mgr_id(),
-                        "type_instance": default,
-                    },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
-                        "fields" : {
-                            "value": value 
-                        }
-                }
-                cluster_data.append(point2)
-        return osd_data, cluster_data
-
-    def get_extended(self, counter_type, type_inst):
-        path = "osd." + type_inst.__str__()
-        osdmap = self.get("osd_map")
-        data = []
-        value = 0
-        for osd in osdmap['osds']: 
-            osd_id = osd['osd']
-            metadata = self.get_metadata('osd', "%s" % osd_id)
-            # this method returns 0 if no data was found, continue and don't build a data point if so
-            value += self.get_latest("osd", osd_id.__str__(), path.__str__()) 
-            if value == 0:
-                continue
-            
-            point = {
-                "measurement": "ceph_daemon_stats",
-                "tags": {
-                    "ceph_daemon": "osd." + str(osd_id),
-                    "type_instance": type_inst,
-                    "host": metadata['hostname']
-                },
-                    "time" : datetime.utcnow().isoformat() + 'Z', 
-                    "fields" : {
-                        "value": self.get_latest("osd", osd_id.__str__(), path.__str__())
-                    }
-            }
-            data.append(point)
-        if counter_type == "cluster":
-            if value == 0:
-                return []
-            else:
-                point = [{
-                    "measurement": "ceph_cluster_stats",
-                    "tags": {
-                        "mgr_id": self.get_mgr_id(),
-                        "type_instance": type_inst,
-                    },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
-                        "fields" : {
-                            "value": value 
-                        }
-                }]
-                return point 
-        else:
-            return data 
+        return osd_data
 
     # we are intentionally coding in the assumption that every database host is using the same user,port, database, etc
     # if that were not true it would be necessary to build a more complex list of dictionaries or a set of indexed lists 
@@ -191,34 +137,7 @@ class Module(MgrModule):
             c = InfluxDBClient(host, self.port, self.username, self.password, self.database) 
             self.clients.append(c)  
 
-    def query_datapoints(self):
-        default_stats = self.get_default_stat()
-        # pg_s = self.get('pg_summary')
-
-        # self.log.info(pg_s)
-
-        for stat in self.stats:
-            if stat == "pool": 
-                self.send_to_influx(self.get_df_stats())
-
-            elif stat == "osd":
-                self.send_to_influx(default_stats[0])
-                
-                for osd in self.osds:
-                    self.send_to_influx(self.get_extended("osd", osd))
-                self.log.debug("wrote osd stats")
-
-            elif stat == "cluster": 
-                self.send_to_influx(default_stats[-1])
-                
-                for cluster in self.clusters:
-                    self.send_to_influx(self.get_extended("cluster", cluster))
-
-                self.log.debug("wrote cluster stats")
-            else:
-                self.log.error("invalid stat")
-
-    def send_to_influx(self, points, resolution='ms'):
+    def send_to_influx(self, points, resolution='u'):
         if len(points) > 0:        
             # catch the not found exception and inform the user, try to create db if we can
             try:
@@ -230,7 +149,6 @@ class Module(MgrModule):
                     client.create_database(database)
                 else:
                     raise
-
 
     def shutdown(self):
         self.log.info('Stopping influx module')
@@ -251,9 +169,11 @@ class Module(MgrModule):
                            "module not found.  Did you install it?")
             return
         self.log.info('Starting influx module')
-        self.run = True
+        # delay startup 10 seconds, otherwise first few queries return no info
+        self.event.wait(10)
         while self.run:
-            self.query_datapoints()
+            self.send_to_influx(self.get_df_stats())
+            self.send_to_influx(self.get_osd_stats())
             self.log.debug("Running interval loop")
             self.log.debug("sleeping for %d seconds",self.interval)
             self.event.wait(self.interval)
