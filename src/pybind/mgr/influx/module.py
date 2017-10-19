@@ -92,6 +92,8 @@ class Module(MgrModule):
             'quota_bytes'
         ]
 
+        mgr_id = self.get_mgr_id()
+        pool_info = {}
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -108,7 +110,9 @@ class Module(MgrModule):
                     }
                 }
                 data.append(point)
-        return data
+                pool_info.update({str(pool['id']):pool['name']})
+        
+        return data, pool_info
 
     def get_daemon_stats(self):
         data = []
@@ -131,20 +135,65 @@ class Module(MgrModule):
                         "host": metadata['hostname'],
                         "fsid": self.get_fsid()
                     },
-                    "time": datetime.utcnow().isoformat() + 'Z',
-                    "fields": {
-                        "value": value
-                    }
-                })
+                        "time" : datetime.utcnow().isoformat() + 'Z', 
+                        "fields" : {
+                            "value": stat_val
+                        }
+                }
+                osd_data.append(point)
+        return osd_data
 
-        return data
+    # we are intentionally coding in the assumption that every database host is using the same user,port, database, etc
+    # if that were not true it would be necessary to build a more complex list of dictionaries or a set of indexed lists 
+    def get_pg_summary(self, pool_info):
+        osd_sum = self.get('pg_summary')['by_osd']
+        pool_sum = self.get('pg_summary')['by_pool']
+        mgr_id = self.get_mgr_id()
+        data = []
+        for osd_id, stats in osd_sum.iteritems():
+            metadata = self.get_metadata('osd', "%s" % osd_id)
+            for stat in stats:
+                point_1 = {
+                    "measurement": "ceph_osd_summary",
+                        "tags": {
+                            "ceph_daemon": "osd." + str(osd_id),
+                            "type_instance": stat,
+                            "host": metadata['hostname']
+                        },
+                            "time" : datetime.utcnow().isoformat() + 'Z', 
+                            "fields" : {
+                                "value": stats[stat]
+                            }
+                }
+                data.append(point_1)
+        for pool_id, stats in pool_sum.iteritems():
+            for stat in stats:
+                point_2 = {
+                    "measurement": "ceph_pool_stats",
+                    "tags": {
+                        "pool_name" : pool_info[pool_id],
+                        "pool_id" : pool_id,
+                        "type_instance" : stat,
+                        "mgr_id" : mgr_id,
+                    },
+                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "fields": {
+                            "value" : stats[stat],
+                        }
+                }
+                data.append(point_2)
+        return data 
 
-    def set_config_option(self, option, value):
-        if option not in self.config_keys.keys():
-            raise RuntimeError('{0} is a unknown configuration '
-                               'option'.format(option))
+        
+    def init_clients(self):
+        self.clients = []
+        for host in self.hosts:
+            c = InfluxDBClient(host, self.port, self.username, self.password, self.database) 
+            self.clients.append(c)  
 
-        if option in ['port', 'interval']:
+    def send_to_influx(self, points, resolution='u'):
+        if len(points) > 0:        
+            # catch the not found exception and inform the user, try to create db if we can
             try:
                 value = int(value)
             except (ValueError, TypeError):
@@ -246,51 +295,3 @@ class Module(MgrModule):
         self.event.set()
 
     def handle_command(self, cmd):
-        if cmd['prefix'] == 'influx config-show':
-            return 0, json.dumps(self.config), ''
-        elif cmd['prefix'] == 'influx config-set':
-            key = cmd['key']
-            value = cmd['value']
-            if not value:
-                return -errno.EINVAL, '', 'Value should not be empty or None'
-
-            self.log.debug('Setting configuration option %s to %s', key, value)
-            self.set_config_option(key, value)
-            self.set_config(key, value)
-            return 0, 'Configuration option {0} updated'.format(key), ''
-        elif cmd['prefix'] == 'influx send':
-            self.send_to_influx()
-            return 0, 'Sending data to Influx', ''
-        if cmd['prefix'] == 'influx self-test':
-            daemon_stats = self.get_daemon_stats()
-            assert len(daemon_stats)
-            df_stats = self.get_df_stats()
-
-            result = {
-                'daemon_stats': daemon_stats,
-                'df_stats': df_stats
-            }
-
-            return 0, json.dumps(result, indent=2), 'Self-test OK'
-
-        return (-errno.EINVAL, '',
-                "Command not found '{0}'".format(cmd['prefix']))
-
-    def serve(self):
-        if InfluxDBClient is None:
-            self.log.error("Cannot transmit statistics: influxdb python "
-                           "module not found.  Did you install it?")
-            return
-
-        self.log.info('Starting influx module')
-        self.init_module_config()
-        self.run = True
-
-        while self.run:
-            start = time.time()
-            self.send_to_influx()
-            runtime = time.time() - start
-            self.log.debug('Finished sending data in Influx in %.3f seconds',
-                           runtime)
-            self.log.debug("Sleeping for %d seconds", self.config['interval'])
-            self.event.wait(self.config['interval'])
