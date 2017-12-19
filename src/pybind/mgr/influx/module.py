@@ -67,6 +67,7 @@ class Module(MgrModule):
 
         mgr_id = self.get_mgr_id()
         pool_info = {}
+        timestamp = datetime.utcnow().isoformat() + 'Z'
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -77,7 +78,7 @@ class Module(MgrModule):
                         "type_instance" : df_type,
                         "mgr_id" : mgr_id,
                     },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "time" : timestamp,
                         "fields": {
                             "value" : pool['stats'][df_type],
                         }
@@ -100,7 +101,8 @@ class Module(MgrModule):
        
         osd_data = []
         for stat in stats:
-            osdmap = self.get("osd_map")['osds'] 
+            osdmap = self.get("osd_map")['osds']
+            timestamp = datetime.utcnow().isoformat() + 'Z' 
             for osd in osdmap:
                 osd_id = osd['osd']
                 metadata = self.get_metadata('osd', "%s" % osd_id)
@@ -123,7 +125,7 @@ class Module(MgrModule):
                         "type_instance": stat,
                         "host": metadata['hostname']
                     },
-                        "time" : datetime.utcnow().isoformat() + 'Z', 
+                        "time" : timestamp, 
                         "fields" : {
                             "value": stat_val
                         }
@@ -131,24 +133,23 @@ class Module(MgrModule):
                 osd_data.append(point)
         return osd_data
 
-    # we are intentionally coding in the assumption that every database host is using the same user,port, database, etc
-    # if that were not true it would be necessary to build a more complex list of dictionaries or a set of indexed lists 
     def get_pg_summary(self, pool_info):
         osd_sum = self.get('pg_summary')['by_osd']
         pool_sum = self.get('pg_summary')['by_pool']
         mgr_id = self.get_mgr_id()
         data = []
+        timestamp = datetime.utcnow().isoformat() + 'Z'
         for osd_id, stats in osd_sum.iteritems():
             metadata = self.get_metadata('osd', "%s" % osd_id)
             for stat in stats:
                 point_1 = {
-                    "measurement": "ceph_osd_summary",
+                    "measurement": "ceph_pg_summary_osd",
                         "tags": {
                             "ceph_daemon": "osd." + str(osd_id),
                             "type_instance": stat,
                             "host": metadata['hostname']
                         },
-                            "time" : datetime.utcnow().isoformat() + 'Z', 
+                            "time" : timestamp, 
                             "fields" : {
                                 "value": stats[stat]
                             }
@@ -157,21 +158,20 @@ class Module(MgrModule):
         for pool_id, stats in pool_sum.iteritems():
             for stat in stats:
                 point_2 = {
-                    "measurement": "ceph_pool_stats",
+                    "measurement": "ceph_pg_summary_pool",
                     "tags": {
                         "pool_name" : pool_info[pool_id],
                         "pool_id" : pool_id,
                         "type_instance" : stat,
                         "mgr_id" : mgr_id,
                     },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "time" : timestamp,
                         "fields": {
                             "value" : stats[stat],
                         }
                 }
                 data.append(point_2)
         return data 
-
         
     def init_clients(self):
         self.clients = []
