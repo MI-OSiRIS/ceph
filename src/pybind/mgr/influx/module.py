@@ -187,24 +187,28 @@ class Module(MgrModule):
 
     def init_module_config(self):
         self.config['hostname'] = \
-            self.get_config("hostname", default=self.config_keys['hostname'])
+                self.get_config("hostname", default=self.config_keys['hostname'])
         self.config['port'] = \
-            int(self.get_config("port", default=self.config_keys['port']))
+                int(self.get_config("port", default=self.config_keys['port']))
         self.config['database'] = \
-            self.get_config("database", default=self.config_keys['database'])
+                self.get_config("database", default=self.config_keys['database'])
         self.config['username'] = \
-            self.get_config("username", default=self.config_keys['username'])
+                self.get_config("username", default=self.config_keys['username'])
         self.config['password'] = \
-            self.get_config("password", default=self.config_keys['password'])
+                self.get_config("password", default=self.config_keys['password'])
         self.config['interval'] = \
-            int(self.get_config("interval",
+                int(self.get_config("interval",
                                 default=self.config_keys['interval']))
-        #delete this
-        self.config['destinations'] = \
-            self.get_config("destinations", default=self.config_keys['destinations'])
+        destinations = self.config_keys['destinations']
+        if not destinations:
+            self.config['destinations'] = \
+                self.get_config("destinations", default=self.config_keys['destinations'])
+        else:
+            self.config['destinations'] = \
+                self.get_config("destinations", eval(self.config_keys['destinations']))
 
     def send_to_influx(self):
-        if not self.config['hostname'] and self.config['destinations']:
+        if not self.config['hostname'] and not self.config['destinations']:
             self.log.error("No Influx server configured, please set one using: "
                            "ceph influx config-set hostname <hostname> or ceph influx config-set destinations <destinations>")
             return
@@ -233,7 +237,7 @@ class Module(MgrModule):
                     raise
                     
         else: 
-            destinations = eval(self.config['destinations'])
+            destinations = self.config['destinations']
             for dest in destinations:
                 client = InfluxDBClient(dest['hostname'], dest['port'],
                 dest['username'], 
