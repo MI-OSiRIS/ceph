@@ -206,7 +206,7 @@ class Module(MgrModule):
         else:
             self.config['destinations'] = \
                 self.get_config("destinations", eval(self.config_keys['destinations']))
-
+            
     def send_to_influx(self):
         if not self.config['hostname'] and not self.config['destinations']:
             self.log.error("No Influx server configured, please set one using: "
@@ -237,9 +237,12 @@ class Module(MgrModule):
                     raise
                     
         else: 
-            destinations = self.config['destinations']
+            self.log.error(self.config['destinations'])
+            destinations = eval(self.config['destinations'])
+            self.log.error(type(destinations))
             for dest in destinations:
-                client = InfluxDBClient(dest['hostname'], dest['port'],
+                self.log.error(type(dest))
+                client = InfluxDBClient(dest['hostname'], int(dest['port']),
                 dest['username'], 
                 dest['password'], 
                 dest['database'] )
