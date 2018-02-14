@@ -199,20 +199,16 @@ class Module(MgrModule):
         self.config['interval'] = \
                 int(self.get_config("interval",
                                 default=self.config_keys['interval']))
-        destinations = self.config_keys['destinations']
-        if not destinations:
-            self.config['destinations'] = \
-                self.get_config("destinations", default=self.config_keys['destinations'])
-        else:
-            self.config['destinations'] = \
-                self.get_config("destinations", eval(self.config_keys['destinations']))
+        if self.config_keys['destinations']:
+        	self.config['destinations'] = \
+                	eval(self.get_config("destinations", default=self.config_keys['destinations']))
             
     def send_to_influx(self):
         if not self.config['hostname'] and not self.config['destinations']:
             self.log.error("No Influx server configured, please set one using: "
                            "ceph influx config-set hostname <hostname> or ceph influx config-set destinations <destinations>")
             return
-        if not self.config['destinations']:
+        if not self.config_keys['destinations']:
             self.log.debug("Sending data to Influx host: %s",
                     self.config['hostname'])
             client = InfluxDBClient(self.config['hostname'], self.config['port'],
@@ -237,11 +233,8 @@ class Module(MgrModule):
                     raise
                     
         else: 
-            self.log.error(self.config['destinations'])
-            destinations = eval(self.config['destinations'])
-            self.log.error(type(destinations))
+            destinations = self.config['destinations']
             for dest in destinations:
-                self.log.error(type(dest))
                 client = InfluxDBClient(dest['hostname'], int(dest['port']),
                 dest['username'], 
                 dest['password'], 
