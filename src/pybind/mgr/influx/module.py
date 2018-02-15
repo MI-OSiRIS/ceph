@@ -199,70 +199,67 @@ class Module(MgrModule):
         self.config['interval'] = \
                 int(self.get_config("interval",
                                 default=self.config_keys['interval']))
-        if self.config_keys['destinations']:
-        	self.config['destinations'] = \
-                	eval(self.get_config("destinations", default=self.config_keys['destinations']))
-            
-    def send_to_influx(self):
+        # get_config_json returns None if key is not set, does not accept default arg 
+        self.config['destinations'] = \
+                self.get_config_json("destinations")
+
         if not self.config['hostname'] and not self.config['destinations']:
             self.log.error("No Influx server configured, please set one using: "
-                           "ceph influx config-set hostname <hostname> or ceph influx config-set destinations <destinations>")
+                           "ceph influx config-set mgr/influx/hostname <hostname> or ceph influx config-set mgr/influx/destinations '<json destinations>'")
             return
-        if not self.config_keys['destinations']:
+
+        self.init_influx_clients()
+
+    def init_influx_clients(self):
+        self.clients = []
+        
+        if not self.config['destinations']:
             self.log.debug("Sending data to Influx host: %s",
                     self.config['hostname'])
             client = InfluxDBClient(self.config['hostname'], self.config['port'],
                     self.config['username'],
                     self.config['password'],
                     self.config['database'])
+            self.clients.append(client)
+        else: 
+            for dest in self.config['destinations']:
+                merge_configs = [ 'port', 'database', 'username', 'password']
+                conf = dict()
 
+                for key in merge_configs:
+                    conf[key] = dest[key] if key in dest else self.config[key]
+
+                self.log.debug("Sending data to Influx host: %s",
+                    dest['hostname'])
+
+                client = InfluxDBClient(dest['hostname'], int(conf['port']),
+                conf['username'], 
+                conf['password'], 
+                conf['database'] )
+                self.clients.append(client)
+
+    def send_to_influx(self):
+        df_stats = self.get_df_stats()
+        daemon_stats = self.get_daemon_stats()
+        pg_summary = self.get_pg_summary(df_stats[1])
+
+        self.log.error(daemon_stats)
+
+        for client in self.clients:
             try:
-                df_stats = self.get_df_stats()
                 client.write_points(df_stats[0], 'ms')
-                client.write_points(self.get_daemon_stats(), 'ms')
-                client.write_points(self.get_pg_summary(df_stats[1]))
+                client.write_points(daemon_stats, 'ms')
+                client.write_points(pg_summary)
             except InfluxDBClientError as e:
                 if e.code == 404:
                     self.log.info("Database '%s' not found, trying to create "
-                            "(requires admin privs).  You can also create "
-                            "manually and grant write privs to user "
-                            "'%s'", self.config['database'],
-                            self.config['username'])
+                        "(requires admin privs).  You can also create "
+                        "manually and grant write privs to user "
+                        "'%s'", self.config['database'],
+                        self.config['username'])
                     client.create_database(self.config['database'])
                 else:
                     raise
-                    
-        else: 
-            destinations = self.config['destinations']
-            for dest in destinations:
-                client = InfluxDBClient(dest['hostname'], int(dest['port']),
-                dest['username'], 
-                dest['password'], 
-                dest['database'] )
-
-                try:
-                    df_stats = self.get_df_stats()
-                    client.write_points(df_stats[0], 'ms')
-                    client.write_points(self.get_daemon_stats(), 'ms')
-                    client.write_points(self.get_pg_summary(df_stats[1]))
-                except InfluxDBClientError as e:
-                    if e.code == 404:
-                        self.log.info("Database '%s' not found, trying to create "
-                                    "(requires admin privs).  You can also create "
-                                    "manually and grant write privs to user "
-                                    "'%s'", self.config['database'],
-                                    self.config['username'])
-                        client.create_database(self.config['database'])
-                    else:
-                        raise
-
-
-        # If influx server has authentication turned off then
-        # missing username/password is valid.
-        # using influx client get_list_database requires admin privs,
-        # instead we'll catch the not found exception and inform the user if
-        # db can not be created
-
 
     def shutdown(self):
         self.log.info('Stopping influx module')
