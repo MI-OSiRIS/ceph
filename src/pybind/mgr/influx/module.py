@@ -94,8 +94,8 @@ class Module(MgrModule):
             'quota_bytes'
         ]
 
-        mgr_id = self.get_mgr_id()
-        pool_info = {}
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -106,19 +106,19 @@ class Module(MgrModule):
                         "type_instance": df_type,
                         "fsid": self.get_fsid()
                     },
+<<<<<<< HEAD
                     "time": datetime.utcnow().isoformat() + 'Z',
                     "fields": {
                         "value": pool['stats'][df_type],
                     }
-                }
                 data.append(point)
                 pool_info.update({str(pool['id']):pool['name']})
-        
+
+>>>>>>> 4545441862... [mgr] [influx] Move data point timestamp calculation out of loops
         return data, pool_info
 
     def get_daemon_stats(self):
         data = []
-
         for daemon, counters in self.get_all_perf_counters().iteritems():
             svc_type, svc_id = daemon.split(".")
             metadata = self.get_metadata(svc_type, svc_id)
@@ -152,6 +152,8 @@ class Module(MgrModule):
         pool_sum = self.get('pg_summary')['by_pool']
         mgr_id = self.get_mgr_id()
         data = []
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+
         for osd_id, stats in osd_sum.iteritems():
             metadata = self.get_metadata('osd', "%s" % osd_id)
             for stat in stats:
@@ -162,7 +164,7 @@ class Module(MgrModule):
                             "type_instance": stat,
                             "host": metadata['hostname']
                         },
-                            "time" : datetime.utcnow().isoformat() + 'Z', 
+                            "time" : timestamp, 
                             "fields" : {
                                 "value": stats[stat]
                             }
@@ -178,7 +180,7 @@ class Module(MgrModule):
                         "type_instance" : stat,
                         "mgr_id" : mgr_id,
                     },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "time" : timestamp,
                         "fields": {
                             "value" : stats[stat],
                         }
