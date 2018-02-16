@@ -156,6 +156,11 @@ class Module(MgrModule):
 
         for osd_id, stats in osd_sum.iteritems():
             metadata = self.get_metadata('osd', "%s" % osd_id)
+            
+            # guard against OSD being removed while in this loop
+            if metadata == None:
+                continue
+
             for stat in stats:
                 point_1 = {
                     "measurement": "ceph_osd_summary",
@@ -195,9 +200,46 @@ class Module(MgrModule):
             c = InfluxDBClient(host, self.port, self.username, self.password, self.database) 
             self.clients.append(c)  
 
-    def send_to_influx(self, points, resolution='u'):
-        if len(points) > 0:        
-            # catch the not found exception and inform the user, try to create db if we can
+    def get_daemon_stats(self):
+        data = []
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+
+        for daemon, counters in self.get_all_perf_counters().iteritems():
+            svc_type, svc_id = daemon.split(".")
+            metadata = self.get_metadata(svc_type, svc_id)
+
+            # guard against OSD being removed while in this loop
+            if metadata == None:
+                continue
+
+            for path, counter_info in counters.items():
+                if counter_info['type'] & self.PERFCOUNTER_HISTOGRAM:
+                    continue
+
+                value = counter_info['value']
+
+                data.append({
+                    "measurement": "ceph_daemon_stats",
+                    "tags": {
+                        "ceph_daemon": daemon,
+                        "type_instance": path,
+                        "host": metadata['hostname'],
+                        "fsid": self.get_fsid()
+                    },
+                    "time": timestamp,
+                    "fields": {
+                        "value": value
+                    }
+                })
+
+        return data
+
+    def set_config_option(self, option, value):
+        if option not in self.config_keys.keys():
+            raise RuntimeError('{0} is a unknown configuration '
+                               'option'.format(option))
+
+        if option in ['port', 'interval']:
             try:
                 value = int(value)
             except (ValueError, TypeError):
@@ -305,6 +347,7 @@ class Module(MgrModule):
             # db can not be created
             try:
                 client.write_points(df_stats[0], 'ms')
+                # for larger cluster sizes (600+ OSD) points must be broken into smaller batches or write will fail 
                 client.write_points(daemon_stats, 'ms')
                 client.write_points(self.get_pg_summary(df_stats[1]))
                 self.set_health_checks(dict())
