@@ -126,6 +126,11 @@ class Module(MgrModule):
 
         for osd_id, stats in osd_sum.iteritems():
             metadata = self.get_metadata('osd', "%s" % osd_id)
+            
+            # guard against OSD being removed while in this loop
+            if metadata == None:
+                continue
+
             for stat in stats:
                 point_1 = {
                     "measurement": "ceph_pg_summary_osd",
@@ -166,6 +171,10 @@ class Module(MgrModule):
         for daemon, counters in self.get_all_perf_counters().iteritems():
             svc_type, svc_id = daemon.split(".")
             metadata = self.get_metadata(svc_type, svc_id)
+
+            # guard against OSD being removed while in this loop
+            if metadata == None:
+                continue
 
             for path, counter_info in counters.items():
                 if counter_info['type'] & self.PERFCOUNTER_HISTOGRAM:
@@ -302,6 +311,7 @@ class Module(MgrModule):
             # db can not be created
             try:
                 client.write_points(df_stats[0], 'ms')
+                # for larger cluster sizes (600+ OSD) points must be broken into smaller batches or write will fail 
                 client.write_points(daemon_stats, 'ms')
                 client.write_points(self.get_pg_summary(df_stats[1]))
                 self.set_health_checks(dict())
