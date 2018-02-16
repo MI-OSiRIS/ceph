@@ -9,6 +9,7 @@ from mgr_module import MgrModule
 try:
     from influxdb import InfluxDBClient
     from influxdb.exceptions import InfluxDBClientError
+    from requests.exceptions import ConnectionError
 except ImportError:
     InfluxDBClient = None
 
@@ -45,6 +46,8 @@ class Module(MgrModule):
         'username': None,
         'password': None,
         'interval': 5,
+        'ssl': 'false',
+        'verify_ssl': 'true'
         'destinations': None
     }
 
@@ -56,6 +59,13 @@ class Module(MgrModule):
 
     def get_fsid(self):
         return self.get('mon_map')['fsid']
+
+    @staticmethod
+    def can_run():
+        if InfluxDBClient is not None:
+            return True, ""
+        else:
+            return False, "influxdb python module not found"
 
     def get_latest(self, daemon_type, daemon_name, stat):
         data = self.get_counter(daemon_type, daemon_name, stat)[stat]
@@ -70,25 +80,29 @@ class Module(MgrModule):
 
         df_types = [
             'bytes_used',
+            'kb_used',
             'dirty',
+            'rd',
             'rd_bytes',
             'raw_bytes_used',
+            'wr',
             'wr_bytes',
             'objects',
-            'max_avail'
+            'max_avail',
+            'quota_objects',
+            'quota_bytes'
         ]
 
-        mgr_id = self.get_mgr_id()
-        pool_info = {}
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
                     "measurement": "ceph_pool_stats",
                     "tags": {
+
                         "pool_name" : pool['name'],
                         "pool_id" : pool['id'],
                         "type_instance" : df_type,
-                        "mgr_id" : mgr_id,
+                        "fsid": self.get_fsid(),
                     },
                         "time" : datetime.utcnow().isoformat() + 'Z',
                         "fields": {
@@ -128,7 +142,7 @@ class Module(MgrModule):
                         "pool_name" : pool_info[pool_id],
                         "pool_id" : pool_id,
                         "type_instance" : stat,
-                        "mgr_id" : mgr_id,
+                        "fsid": self.get_fsid(),
                     },
                         "time" : datetime.utcnow().isoformat() + 'Z',
                         "fields": {
@@ -220,22 +234,30 @@ class Module(MgrModule):
         if option == 'interval' and value < 5:
             raise RuntimeError('interval should be set to at least 5 seconds')
 
+        if option in ['ssl', 'verify_ssl']:
+            value = value.lower() == 'true'
+
         self.config[option] = value
 
     def init_module_config(self):
-        self.config['hostname'] = \
-                self.get_config("hostname", default=self.config_keys['hostname'])
+         self.get_config("hostname", default=self.config_keys['hostname'])
         self.config['port'] = \
-                int(self.get_config("port", default=self.config_keys['port']))
+            int(self.get_config("port", default=self.config_keys['port']))
         self.config['database'] = \
-                self.get_config("database", default=self.config_keys['database'])
+            self.get_config("database", default=self.config_keys['database'])
         self.config['username'] = \
-                self.get_config("username", default=self.config_keys['username'])
+            self.get_config("username", default=self.config_keys['username'])
         self.config['password'] = \
-                self.get_config("password", default=self.config_keys['password'])
+            self.get_config("password", default=self.config_keys['password'])
         self.config['interval'] = \
-                int(self.get_config("interval",
+            int(self.get_config("interval",
                                 default=self.config_keys['interval']))
+        ssl = self.get_config("ssl", default=self.config_keys['ssl'])
+        self.config['ssl'] = ssl.lower() == 'true'
+        verify_ssl = \
+            self.get_config("verify_ssl", default=self.config_keys['verify_ssl'])
+        self.config['verify_ssl'] = verify_ssl.lower() == 'true'
+
         # get_config_json returns None if key is not set, does not accept default arg 
         self.config['destinations'] = \
                 self.get_config_json("destinations")
@@ -276,24 +298,58 @@ class Module(MgrModule):
                 self.clients.append(client)
 
     def send_to_influx(self):
+        if not self.config['hostname']:
+            self.log.error("No Influx server configured, please set one using: "
+                           "ceph influx config-set hostname <hostname>")
+            self.set_health_checks({
+                'MGR_INFLUX_NO_SERVER': {
+                    'severity': 'warning',
+                    'summary': 'No InfluxDB server configured',
+                    'detail': ['Configuration option hostname not set']
+                }
+            })
+            return
+
         df_stats = self.get_df_stats()
         daemon_stats = self.get_daemon_stats()
         pg_summary = self.get_pg_summary(df_stats[1])
 
         for client in self.clients:
+            # using influx client get_list_database requires admin privs,
+            # instead we'll catch the not found exception and inform the user if
+            # db can not be created
             try:
-                client.write_points(df_stats[0], 'ms')
-                client.write_points(daemon_stats, 'ms')
-                client.write_points(pg_summary)
+                client.write_points(self.get_df_stats(), 'ms')
+                client.write_points(self.get_daemon_stats(), 'ms')
+                self.set_health_checks(dict())
+            except ConnectionError as e:
+                self.log.exception("Failed to connect to Influx host %s:%d",
+                                   self.config['hostname'], self.config['port'])
+                self.set_health_checks({
+                    'MGR_INFLUX_SEND_FAILED': {
+                        'severity': 'warning',
+                        'summary': 'Failed to send data to InfluxDB server at %s:%d'
+                                   ' due to an connection error'
+                                   % (self.config['hostname'], self.config['port']),
+                        'detail': [str(e)]
+                    }
+                })
             except InfluxDBClientError as e:
                 if e.code == 404:
                     self.log.info("Database '%s' not found, trying to create "
-                        "(requires admin privs).  You can also create "
-                        "manually and grant write privs to user "
-                        "'%s'", self.config['database'],
-                        self.config['username'])
+                                  "(requires admin privs).  You can also create "
+                                  "manually and grant write privs to user "
+                                  "'%s'", self.config['database'],
+                                  self.config['username'])
                     client.create_database(self.config['database'])
                 else:
+                    self.set_health_checks({
+                        'MGR_INFLUX_SEND_FAILED': {
+                            'severity': 'warning',
+                            'summary': 'Failed to send data to InfluxDB',
+                            'detail': [str(e)]
+                        }
+                    })
                     raise
 
     def shutdown(self):
@@ -320,7 +376,8 @@ class Module(MgrModule):
         if cmd['prefix'] == 'influx self-test':
             daemon_stats = self.get_daemon_stats()
             assert len(daemon_stats)
-            df_stats = self.get_df_stats()[0]
+
+            df_stats = self.get_df_stats()
 
             result = {
                 'daemon_stats': daemon_stats,
@@ -350,6 +407,3 @@ class Module(MgrModule):
                            runtime)
             self.log.debug("Sleeping for %d seconds", self.config['interval'])
             self.event.wait(self.config['interval'])
-
-
-            

@@ -13,6 +13,8 @@ testlog "TEST: add image and test replay"
 start_mirror ${CLUSTER1}
 image=test
 create_image ${CLUSTER2} ${POOL} ${image}
+set_image_meta ${CLUSTER2} ${POOL} ${image} "key1" "value1"
+set_image_meta ${CLUSTER2} ${POOL} ${image} "key2" "value2"
 wait_for_image_replay_started ${CLUSTER1} ${POOL} ${image}
 write_image ${CLUSTER2} ${POOL} ${image} 100
 wait_for_replay_complete ${CLUSTER1} ${CLUSTER2} ${POOL} ${image}
@@ -21,6 +23,8 @@ if [ -z "${RBD_MIRROR_USE_RBD_MIRROR}" ]; then
   wait_for_status_in_pool_dir ${CLUSTER2} ${POOL} ${image} 'down+unknown'
 fi
 compare_images ${POOL} ${image}
+compare_image_meta ${CLUSTER1} ${POOL} ${image} "key1" "value1"
+compare_image_meta ${CLUSTER1} ${POOL} ${image} "key2" "value2"
 
 testlog "TEST: stop mirror, add image, start mirror and test replay"
 stop_mirror ${CLUSTER1}
@@ -110,6 +114,18 @@ wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image1} 'up+replaying'
 
 admin_daemon ${CLUSTER1} rbd mirror flush
 admin_daemon ${CLUSTER1} rbd mirror status
+
+testlog "TEST: test image rename"
+new_name="${image}_RENAMED"
+rename_image ${CLUSTER2} ${POOL} ${image} ${new_name}
+wait_for_image_replay_started ${CLUSTER1} ${POOL} ${new_name}
+wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${new_name} 'up+replaying'
+admin_daemon ${CLUSTER1} rbd mirror status ${POOL}/${new_name}
+admin_daemon ${CLUSTER1} rbd mirror restart ${POOL}/${new_name}
+wait_for_image_replay_started ${CLUSTER1} ${POOL} ${new_name}
+wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${new_name} 'up+replaying'
+rename_image ${CLUSTER2} ${POOL} ${new_name} ${image}
+wait_for_image_replay_started ${CLUSTER1} ${POOL} ${image}
 
 testlog "TEST: failover and failback"
 start_mirror ${CLUSTER2}
@@ -213,8 +229,25 @@ wait_for_replay_complete ${CLUSTER1} ${CLUSTER2} ${POOL} ${clone_image}
 wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${clone_image} 'up+replaying' 'master_position'
 compare_images ${POOL} ${clone_image}
 
-expect_failure "is non-primary" clone_image ${CLUSTER1} ${PARENT_POOL} \
-    ${parent_image} ${parent_snap} ${POOL} ${clone_image}1
+clone_image ${CLUSTER1} ${PARENT_POOL} ${parent_image} ${parent_snap} ${POOL} ${clone_image}1
+
+testlog "TEST: data pool"
+dp_image=test_data_pool
+create_image ${CLUSTER2} ${POOL} ${dp_image} 128 --data-pool ${PARENT_POOL}
+data_pool=$(get_image_data_pool ${CLUSTER2} ${POOL} ${dp_image})
+test "${data_pool}" = "${PARENT_POOL}"
+wait_for_image_replay_started ${CLUSTER1} ${POOL} ${dp_image}
+data_pool=$(get_image_data_pool ${CLUSTER1} ${POOL} ${dp_image})
+test "${data_pool}" = "${PARENT_POOL}"
+create_snapshot ${CLUSTER2} ${POOL} ${dp_image} 'snap1'
+write_image ${CLUSTER2} ${POOL} ${dp_image} 100
+create_snapshot ${CLUSTER2} ${POOL} ${dp_image} 'snap2'
+write_image ${CLUSTER2} ${POOL} ${dp_image} 100
+wait_for_replay_complete ${CLUSTER1} ${CLUSTER2} ${POOL} ${dp_image}
+wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${dp_image} 'up+replaying' 'master_position'
+compare_images ${POOL} ${dp_image}@snap1
+compare_images ${POOL} ${dp_image}@snap2
+compare_images ${POOL} ${dp_image}
 
 testlog "TEST: disable mirroring / delete non-primary image"
 image2=test2
@@ -386,12 +419,11 @@ testlog "TEST: split-brain"
 image=split-brain
 create_image ${CLUSTER2} ${POOL} ${image}
 wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+replaying' 'master_position'
-demote_image ${CLUSTER2} ${POOL} ${image}
-wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+unknown'
-promote_image ${CLUSTER1} ${POOL} ${image}
+promote_image ${CLUSTER1} ${POOL} ${image} --force
+wait_for_image_replay_stopped ${CLUSTER1} ${POOL} ${image}
+wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+stopped'
 write_image ${CLUSTER1} ${POOL} ${image} 10
 demote_image ${CLUSTER1} ${POOL} ${image}
-promote_image ${CLUSTER2} ${POOL} ${image}
 wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+error' 'split-brain'
 request_resync_image ${CLUSTER1} ${POOL} ${image} image_id
 wait_for_status_in_pool_dir ${CLUSTER1} ${POOL} ${image} 'up+replaying' 'master_position'

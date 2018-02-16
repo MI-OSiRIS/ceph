@@ -44,7 +44,7 @@ extern string reverse_hexdigit_bits_string(string l);
  * would be located in (root)/2/D/0/
  *
  * Subdirectories are created when the number of objects in a
- * directory exceed 16 * (abs(merge_threshhold)) * split_multiplier +
+ * directory exceed 16 * (abs(merge_threshhold) * split_multiplier +
  * split_rand_factor). The number of objects in a directory is encoded
  * as subdir_info_s in an xattr on the directory.
  */
@@ -84,21 +84,23 @@ private:
 
     void encode(bufferlist &bl) const
     {
+      using ceph::encode;
       __u8 v = 1;
-      ::encode(v, bl);
-      ::encode(objs, bl);
-      ::encode(subdirs, bl);
-      ::encode(hash_level, bl);
+      encode(v, bl);
+      encode(objs, bl);
+      encode(subdirs, bl);
+      encode(hash_level, bl);
     }
 
     void decode(bufferlist::iterator &bl)
     {
+      using ceph::decode;
       __u8 v;
-      ::decode(v, bl);
+      decode(v, bl);
       assert(v == 1);
-      ::decode(objs, bl);
-      ::decode(subdirs, bl);
-      ::decode(hash_level, bl);
+      decode(objs, bl);
+      decode(subdirs, bl);
+      decode(hash_level, bl);
     }
   };
 
@@ -107,15 +109,17 @@ private:
     settings_s() : split_rand_factor(0) {}
     void encode(bufferlist &bl) const
     {
+      using ceph::encode;
       __u8 v = 1;
-      ::encode(v, bl);
-      ::encode(split_rand_factor, bl);
+      encode(v, bl);
+      encode(split_rand_factor, bl);
     }
     void decode(bufferlist::iterator &bl)
     {
+      using ceph::decode;
       __u8 v;
-      ::decode(v, bl);
-      ::decode(split_rand_factor, bl);
+      decode(v, bl);
+      decode(split_rand_factor, bl);
     }
   } settings;
 
@@ -139,18 +143,20 @@ private:
     bool is_merge() const { return op == MERGE; }
 
     void encode(bufferlist &bl) const {
+      using ceph::encode;
       __u8 v = 1;
-      ::encode(v, bl);
-      ::encode(op, bl);
-      ::encode(path, bl);
+      encode(v, bl);
+      encode(op, bl);
+      encode(path, bl);
     }
 
     void decode(bufferlist::iterator &bl) {
+      using ceph::decode;
       __u8 v;
-      ::decode(v, bl);
+      decode(v, bl);
       assert(v == 1);
-      ::decode(op, bl);
-      ::decode(path, bl);
+      decode(op, bl);
+      decode(path, bl);
     }
   };
 
@@ -189,7 +195,7 @@ public:
     ) override;
 
   /// @see CollectionIndex
-  int apply_layout_settings() override;
+  int apply_layout_settings(int target_level) override;
 
 protected:
   int _init() override;
@@ -272,7 +278,8 @@ private:
 
   /// Encapsulates logic for when to merge.
   bool must_split(
-    const subdir_info_s &info ///< [in] Info to check
+    const subdir_info_s &info, ///< [in] Info to check
+    int target_level = 0
     ); /// @return True if info must be split, False otherwise
 
   /// Initiates merge
@@ -436,7 +443,7 @@ private:
   int recursive_create_path(vector<string>& path, int level);
 
   /// split each dir below the given path
-  int split_dirs(const vector<string> &path);
+  int split_dirs(const vector<string> &path, int target_level = 0);
 
   int write_settings();
 };

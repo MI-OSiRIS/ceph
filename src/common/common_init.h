@@ -23,7 +23,7 @@ class CephContext;
 class CephInitParameters;
 
 enum common_init_flags_t {
-  // Set up defaults that make sense for an unprivileged deamon
+  // Set up defaults that make sense for an unprivileged daemon
   CINIT_FLAG_UNPRIVILEGED_DAEMON_DEFAULTS = 0x1,
 
   // By default, don't read a configuration file
@@ -57,8 +57,7 @@ enum common_init_flags_t {
  * Your library may also supply functions to read a configuration file.
  */
 CephContext *common_preinit(const CephInitParameters &iparams,
-			    enum code_environment_t code_env, int flags,
-			    const char *data_dir_option = 0);
+			    enum code_environment_t code_env, int flags);
 
 /* Print out some parse errors. */
 void complain_about_parse_errors(CephContext *cct,

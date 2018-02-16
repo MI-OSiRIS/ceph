@@ -223,8 +223,20 @@ namespace rgw {
 namespace auth {
 namespace s3 {
 
-/* FIXME(rzarzynski): duplicated from rgw_rest_s3.h. */
-#define RGW_AUTH_GRACE_MINS 15
+bool is_time_skew_ok(time_t t)
+{
+  auto req_tp = ceph::coarse_real_clock::from_time_t(t);
+  auto cur_tp = ceph::coarse_real_clock::now();
+
+  if (std::chrono::abs(cur_tp - req_tp) > RGW_AUTH_GRACE) {
+    dout(10) << "NOTICE: request time skew too big." << dendl;
+    using ceph::operator<<;
+    dout(10) << "req_tp=" << req_tp << ", cur_tp=" << cur_tp << dendl;
+    return false;
+  }
+
+  return true;
+}
 
 static inline int parse_v4_query_string(const req_info& info,              /* in */
                                         boost::string_view& credential,    /* out */
@@ -246,41 +258,24 @@ static inline int parse_v4_query_string(const req_info& info,              /* in
     return -EPERM;
   }
 
-  /* Used for pre-signatured url, We shouldn't return -ERR_REQUEST_TIME_SKEWED
-   * when current time <= X-Amz-Expires */
-  bool qsr = false;
-
-  uint64_t now_req = 0;
-  uint64_t now = ceph_clock_now();
-
   boost::string_view expires = info.args.get("X-Amz-Expires");
-  if (!expires.empty()) {
-    /* X-Amz-Expires provides the time period, in seconds, for which
-       the generated presigned URL is valid. The minimum value
-       you can set is 1, and the maximum is 604800 (seven days) */
-    time_t exp = atoll(expires.data());
-    if ((exp < 1) || (exp > 7*24*60*60)) {
-      dout(10) << "NOTICE: exp out of range, exp = " << exp << dendl;
-      return -EPERM;
-    }
-    /* handle expiration in epoch time */
-    now_req = (uint64_t)internal_timegm(&date_t);
-    if (now >= now_req + exp) {
-      dout(10) << "NOTICE: now = " << now << ", now_req = " << now_req << ", exp = " << exp << dendl;
-      return -EPERM;
-    }
-    qsr = true;
+  if (expires.empty()) {
+    return -EPERM;
   }
-
-  if ((now_req < now - RGW_AUTH_GRACE_MINS * 60 ||
-     now_req > now + RGW_AUTH_GRACE_MINS * 60) && !qsr) {
-    dout(10) << "NOTICE: request time skew too big." << dendl;
-    dout(10) << "now_req = " << now_req << " now = " << now
-             << "; now - RGW_AUTH_GRACE_MINS="
-             << now - RGW_AUTH_GRACE_MINS * 60
-             << "; now + RGW_AUTH_GRACE_MINS="
-             << now + RGW_AUTH_GRACE_MINS * 60 << dendl;
-    return -ERR_REQUEST_TIME_SKEWED;
+  /* X-Amz-Expires provides the time period, in seconds, for which
+     the generated presigned URL is valid. The minimum value
+     you can set is 1, and the maximum is 604800 (seven days) */
+  time_t exp = atoll(expires.data());
+  if ((exp < 1) || (exp > 7*24*60*60)) {
+    dout(10) << "NOTICE: exp out of range, exp = " << exp << dendl;
+    return -EPERM;
+  }
+  /* handle expiration in epoch time */
+  uint64_t req_sec = (uint64_t)internal_timegm(&date_t);
+  uint64_t now = ceph_clock_now();
+  if (now >= req_sec + exp) {
+    dout(10) << "NOTICE: now = " << now << ", req_sec = " << req_sec << ", exp = " << exp << dendl;
+    return -EPERM;
   }
 
   signedheaders = info.args.get("X-Amz-SignedHeaders");
@@ -408,6 +403,10 @@ static inline int parse_v4_auth_header(const req_info& info,               /* in
   }
   date = d;
 
+  if (!is_time_skew_ok(internal_timegm(&t))) {
+    return -ERR_REQUEST_TIME_SKEWED;
+  }
+
   return 0;
 }
 
@@ -417,13 +416,10 @@ int parse_credentials(const req_info& info,                     /* in */
                       boost::string_view& signedheaders,        /* out */
                       boost::string_view& signature,            /* out */
                       boost::string_view& date,                 /* out */
-                      bool& using_qs)                           /* out */
+                      const bool using_qs)                      /* in */
 {
-  const char* const http_auth = info.env->get("HTTP_AUTHORIZATION");
-  using_qs = http_auth == nullptr || http_auth[0] == '\0';
-
-  int ret;
   boost::string_view credential;
+  int ret;
   if (using_qs) {
     ret = parse_v4_query_string(info, credential, signedheaders,
                                 signature, date);
@@ -436,7 +432,7 @@ int parse_credentials(const req_info& info,                     /* in */
     return ret;
   }
 
-  /* AKIAIVKTAZLOCF43WNQD/AAAAMMDD/region/host/aws4_request */
+  /* access_key/YYYYMMDD/region/service/aws4_request */
   dout(10) << "v4 credential format = " << credential << dendl;
 
   if (std::count(credential.begin(), credential.end(), '/') != 4) {
@@ -501,15 +497,22 @@ static inline std::string aws4_uri_recode(const boost::string_view& src)
 
 std::string get_v4_canonical_qs(const req_info& info, const bool using_qs)
 {
-  if (info.request_params.empty()) {
+  const std::string *params = &info.request_params;
+  std::string copy_params;
+  if (params->empty()) {
     /* Optimize the typical flow. */
     return std::string();
+  }
+  if (params->find_first_of('+') != std::string::npos) {
+    copy_params = *params;
+    boost::replace_all(copy_params, "+", " ");
+    params = &copy_params;
   }
 
   /* Handle case when query string exists. Step 3 described in: http://docs.
    * aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html */
   std::map<std::string, std::string> canonical_qs_map;
-  for (const auto& s : get_str_vec<5>(info.request_params, "&")) {
+  for (const auto& s : get_str_vec<5>(*params, "&")) {
     boost::string_view key, val;
     const auto parsed_pair = parse_key_value(s);
     if (parsed_pair) {
@@ -986,8 +989,11 @@ size_t AWSv4ComplMulti::recv_body(char* const buf, const size_t buf_max)
                       std::begin(parsing_buf) + consumed);
   }
 
+  size_t stream_pos_was = stream_pos - parsing_buf.size();
+
   size_t to_extract = \
-    std::min(chunk_meta.get_data_size(stream_pos), buf_max);
+    std::min(chunk_meta.get_data_size(stream_pos_was), buf_max);
+  dout(30) << "AWSv4ComplMulti: stream_pos_was=" << stream_pos_was << ", to_extract=" << to_extract << dendl;
   
   /* It's quite probable we have a couple of real data bytes stored together
    * with meta-data in the parsing_buf. We need to extract them and move to
@@ -996,6 +1002,7 @@ size_t AWSv4ComplMulti::recv_body(char* const buf, const size_t buf_max)
   if (to_extract > 0 && parsing_buf.size() > 0) {
     const auto data_len = std::min(to_extract, parsing_buf.size());
     const auto data_end_iter = std::begin(parsing_buf) + data_len;
+    dout(30) << "AWSv4ComplMulti: to_extract=" << to_extract << ", data_len=" << data_len << dendl;
 
     std::copy(std::begin(parsing_buf), data_end_iter, buf);
     parsing_buf.erase(std::begin(parsing_buf), data_end_iter);
@@ -1010,6 +1017,7 @@ size_t AWSv4ComplMulti::recv_body(char* const buf, const size_t buf_max)
    * buffering. */
   while (to_extract > 0) {
     const size_t received = io_base_t::recv_body(buf + buf_pos, to_extract);
+    dout(30) << "AWSv4ComplMulti: to_extract=" << to_extract << ", received=" << received << dendl;
 
     if (received == 0) {
       break;

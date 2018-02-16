@@ -68,7 +68,7 @@ namespace CrushTreeDumper {
     explicit Dumper(const CrushWrapper *crush_,
 		    const name_map_t& weight_set_names_)
       : crush(crush_), weight_set_names(weight_set_names_) {
-      crush->find_nonshadow_roots(roots);
+      crush->find_nonshadow_roots(&roots);
       root = roots.begin();
     }
     explicit Dumper(const CrushWrapper *crush_,
@@ -76,9 +76,9 @@ namespace CrushTreeDumper {
                     bool show_shadow)
       : crush(crush_), weight_set_names(weight_set_names_) {
       if (show_shadow) {
-        crush->find_roots(roots);
+        crush->find_roots(&roots);
       } else {
-        crush->find_nonshadow_roots(roots);
+        crush->find_nonshadow_roots(&roots);
       }
       root = roots.begin();
     }
@@ -166,6 +166,14 @@ namespace CrushTreeDumper {
     }
 
     bool is_touched(int id) const { return touched.count(id) > 0; }
+
+    void set_root(const string& bucket) {
+      roots.clear();
+      if (crush->name_exists(bucket)) {
+	int i = crush->get_item_id(bucket);
+	roots.insert(i);
+      }
+    }
 
   protected:
     virtual void dump_item(const Item &qi, F *f) = 0;

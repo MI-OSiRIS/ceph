@@ -23,7 +23,7 @@ calculated automatically. Here are a few values commonly used:
 - If you have more than 50 OSDs, you need to understand the tradeoffs
   and how to calculate the ``pg_num`` value by yourself
 
-- For calculating ``pg_num`` value by yourself please take help of `pgcalc`_ tool 
+- For calculating ``pg_num`` value by yourself please take help of `pgcalc`_ tool
 
 As the number of OSDs increases, chosing the right value for pg_num
 becomes more important because it has a significant influence on the
@@ -118,9 +118,9 @@ permanent data loss in a single placement group:
 
 - The OSD fails and all copies of the object it contains are lost.
   For all objects within the placement group the number of replica
-  suddently drops from three to two.
+  suddenly drops from three to two.
 
-- Ceph starts recovery for this placement group by chosing a new OSD
+- Ceph starts recovery for this placement group by choosing a new OSD
   to re-create the third copy of all objects.
 
 - Another OSD, within the same placement group, fails before the new
@@ -191,7 +191,7 @@ will degrade ~4 (i.e. ~75 / 19 placement groups being recovered)
 instead of ~17 and the third OSD lost will only lose data if it is one
 of the four OSDs containing the surviving copy. In other words, if the
 probability of losing one OSD is 0.0001% during the recovery time
-frame, it goes from 17 * 10 * 0.0001% in the cluster with 10 OSDs to 4 * 20 * 
+frame, it goes from 17 * 10 * 0.0001% in the cluster with 10 OSDs to 4 * 20 *
 0.0001% in the cluster with 20 OSDs.
 
 In a nutshell, more OSDs mean faster recovery and a lower risk of
@@ -216,7 +216,7 @@ placement group, the ratio between the number of placement groups and
 the number of OSDs may influence the distribution of the data
 significantly.
 
-For instance, if there was single a placement group for ten OSDs in a
+For instance, if there was a single placement group for ten OSDs in a
 three replica pool, only three OSD would be used because CRUSH would
 have no other choice. When more placement groups are available,
 objects are more likely to be evenly spread among them. CRUSH also
@@ -250,12 +250,14 @@ they exist.
 Minimizing the number of placement groups saves significant amounts of
 resources.
 
+.. _choosing-number-of-placement-groups:
+
 Choosing the number of Placement Groups
 =======================================
 
 If you have more than 50 OSDs, we recommend approximately 50-100
 placement groups per OSD to balance out resource usage, data
-durability and distribution. If you have less than 50 OSDs, chosing
+durability and distribution. If you have less than 50 OSDs, choosing
 among the `preselection`_ above is best. For a single pool of objects,
 you can use the following formula to get a baseline::
 
@@ -412,7 +414,7 @@ than others (for example, those PGs may hold data for images used by running
 machines and other PGs may be used by inactive machines/less relevant data).
 In that case, you may want to prioritize recovery of those groups so
 performance and/or availability of data stored on those groups is restored
-earlier. To do this (mark particular placement group(s) as prioritized during 
+earlier. To do this (mark particular placement group(s) as prioritized during
 backfill or recovery), execute the following::
 
         ceph pg force-recovery {pg-id} [{pg-id #2}] [{pg-id #3} ...]

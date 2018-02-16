@@ -18,6 +18,7 @@
 #include "include/assert.h"
 #include <iterator>
 #include <cstdlib>
+#include <ostream>
 
 template<typename T>
 class xlist {
@@ -33,9 +34,8 @@ public:
       //remove_myself();
     }
 
-    // no copying!
-    item(const item& other);
-    const item& operator= (const item& right);
+    item(const item& other) = delete;
+    const item& operator= (const item& right) = delete;
 
     
     xlist* get_list() { return _list; }
@@ -63,7 +63,7 @@ public:
 
 private:
   item *_front, *_back;
-  int _size;
+  size_t _size;
 
 public:
   xlist(const xlist& other) {
@@ -79,7 +79,7 @@ public:
     assert(_back == 0);
   }
 
-  int size() const {
+  size_t size() const {
     assert((bool)_front == (bool)_size);
     return _size;
   }
@@ -192,10 +192,28 @@ public:
       return *this;
     }
     bool end() const { return cur == 0; }
+    bool operator==(const_iterator& rhs) const {
+      return cur == rhs.cur;
+    }
+    bool operator!=(const_iterator& rhs) const {
+      return cur != rhs.cur;
+    }
   };
 
   const_iterator begin() const { return const_iterator(_front); }
   const_iterator end() const { return const_iterator(NULL); }
+
+  friend std::ostream &operator<<(std::ostream &oss, const xlist<T> &list) {
+    bool first = true;
+    for (const auto &item : list) {
+      if (!first) {
+        oss << ", ";
+      }
+      oss << *item; /* item should be a pointer */
+      first = false;
+    }
+    return oss;
+  }
 };
 
 

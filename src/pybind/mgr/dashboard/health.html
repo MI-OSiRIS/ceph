@@ -81,26 +81,33 @@
             };
 
             rivets.formatters.pg_status_style = function(pg_status) {
-                var unhealthy = false;
-                var scrubbing = false;
-                $.each(pg_status, function(state, count) {
-                    if (state == "active+clean") {
+                var warning = false;
+                var error = false;
 
-                    } else if (state == "active+clean+scrubbing"
-                    || state == "active+clean+scrubbing+deep") {
-                        scrubbing = true;
-                    } else {
-                        unhealthy = true;
+                $.each(pg_status, function(state, count) {
+                    if (state.includes("inconsistent") ||
+                        state.includes("incomplete") ||
+                        !state.includes("active")
+                    ) {
+                        error = true;
+                    }
+
+                    if (state != "active+clean"
+                     && state != "active+clean+scrubbing"
+                     && state != "active+clean+scrubbing+deep") {
+                        warning = true;
                     }
                 });
 
-                if (unhealthy) {
-                    return "color: #FFC200";
-                } else if (scrubbing) {
-                    return "color: #0000bb";
-                } else {
-                    return "color: #00bb00";
+                if (error) {
+                    return "color: #FF0000";
                 }
+
+                if (warning) {
+                    return "color: #FFC200";
+                }
+
+                return "color: #00BB00";
             };
 
             rivets.formatters.pg_status = function(pg_status) {
@@ -144,6 +151,18 @@
                     content_data.df.stats.total_used_bytes
                     / content_data.df.stats.total_bytes)) + "%";
                 var raw_usage_canvas = $("#raw_usage_chart").get(0).getContext("2d");
+                if (content_data.df.stats.total_used_bytes/content_data.df.stats.total_bytes
+                    >= content_data.osd_map.full_ratio) {
+                    var raw_usage_chart_color = "#ff0000";
+                } else if (content_data.df.stats.total_used_bytes/content_data.df.stats.total_bytes
+                           >= content_data.osd_map.backfillfull_ratio) {
+                    var raw_usage_chart_color = "#ff6600";
+                } else if (content_data.df.stats.total_used_bytes/content_data.df.stats.total_bytes
+                           >= content_data.osd_map.nearfull_ratio) {
+                    var raw_usage_chart_color = "#ffc200";
+                } else {
+                    var raw_usage_chart_color = "#00bb00";
+                }
                 var raw_usage_chart = new Chart(raw_usage_canvas, {
                     type: 'doughnut',
                     data: {
@@ -159,15 +178,23 @@
                                 content_data.df.stats.total_used_bytes,
                                 content_data.df.stats.total_avail_bytes
                             ],
-                            backgroundColor: ["#424d52", "#222d32"]
+                            backgroundColor: [raw_usage_chart_color, "#424d52"]
                             }
                         ]
                     },
                     options: {
                         center_text: raw_usage_text,
-                        responsive: false,
+                        responsive: true,
                         legend: {display: false},
-                        animation: {duration: 0}
+                        animation: {duration: 0},
+                        tooltips: {
+                            callbacks: {
+                                label: function(tooltipItem, chart) {
+                                    return chart.labels[tooltipItem.index] + ": " +
+					    rivets.formatters.dimless_binary(chart.datasets[0].data[tooltipItem.index]);
+                                }
+                            }
+                        }
                     }
                 });
 
@@ -199,9 +226,17 @@
                         ]
                     },
                     options: {
-                        responsive: false,
+                        responsive: true,
                         legend: {display: false},
-                        animation: {duration: 0}
+                        animation: {duration: 0},
+                        tooltips: {
+                            callbacks: {
+                                label: function(tooltipItem, chart) {
+                                    return chart.labels[tooltipItem.index] + ": " +
+					    rivets.formatters.dimless_binary(chart.datasets[0].data[tooltipItem.index]);
+                                }
+                            }
+                        }
                     }
                 });
             }
@@ -210,7 +245,7 @@
             rivets.bind($("#content"), content_data);
 
             var refresh = function() {
-                $.get("/health_data", function(data) {
+                $.get("{{ url_prefix }}/health_data", function(data) {
                     _.extend(content_data, data);
                     draw_usage_charts();
                     setTimeout(refresh, 5000);
@@ -297,13 +332,15 @@
                                 <td>
                                     <span style="font-size: 45px;">{df.stats.total_objects | dimless}</span>
                                 </td>
-                                <td>
-                                    <canvas id="raw_usage_chart"
-                                            style="height:120px; width:120px;"></canvas>
+                                <td >
+                                    <div style="height:120px; width: 120px;">
+                                        <canvas id="raw_usage_chart"></canvas>
+                                    </div>
                                 </td>
                                 <td>
-                                    <canvas id="pool_usage_chart"
-                                            style="height:120px; width: 120px;"></canvas>
+                                    <div style="height:120px; width: 120px;">
+                                        <canvas id="pool_usage_chart"></canvas>
+                                    </div>
                                 </td>
                             </tr>
                             <tr>
@@ -328,23 +365,32 @@
                             <th>Name</th>
                             <th>PG status</th>
                             <th>Usage</th>
-                            <th>Activity</th>
+                            <th colspan="2">Read</th>
+                            <th colspan="2">Write</th>
                             </thead>
                             <tbody>
                             <tr rv-each-pool="pools">
-                                <td style="text-align: right;">
+                                <td>
                                     {pool.pool_name}
                                 </td>
                                 <td rv-style="pool.pg_status | pg_status_style">
                                     {pool.pg_status | pg_status}
                                 </td>
                                 <td>
-                                    {pool.stats.bytes_used.latest | dimless} /
-                                    {pool.stats.max_avail.latest | dimless }
+                                    {pool.stats.bytes_used.latest | dimless_binary } /
+                                    {pool.stats.max_avail.latest | dimless_binary }
                                 </td>
                                 <td>
-                                    {pool.stats.rd_bytes.rate | dimless } rd, {
-                                    pool.stats.wr_bytes.rate | dimless } wr
+                                    {pool.stats.rd_bytes.rate | dimless }
+                                </td>
+                                <td>
+                                    {pool.stats.rd.rate | dimless } ops
+                                </td>
+                                <td>
+                                    {pool.stats.wr_bytes.rate | dimless }
+                                </td>
+                                <td>
+                                    {pool.stats.wr.rate | dimless } ops
                                 </td>
                             </tr>
                             </tbody>

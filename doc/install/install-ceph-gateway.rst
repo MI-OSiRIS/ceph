@@ -159,12 +159,20 @@ CA or intermediate certificates be supplied in one file.  Each of these
 items must be in `pem` form.  Because the combined file contains the
 secret key, it should be protected from unauthorized access.
 
-To configure ssl operation, append ``s`` to the port number.  Currently
-it is not possible to configure the radosgw to listen on both
-http and https, you must pick only one.  So::
+To configure ssl operation, append ``s`` to the port number. For eg::
 
  [client.rgw.gateway-node1]
  rgw_frontends = civetweb port=443s ssl_certificate=/etc/ceph/private/keyandcert.pem
+
+.. versionadded :: Luminous
+
+Furthermore, civetweb can be made to bind to multiple ports, by separating them
+with ``+`` in the configuration. This allows for use cases where both ssl and
+non-ssl connections are hosted by a single rgw instance. For eg::
+
+ [client.rgw.gateway-node1]
+ rgw_frontends = civetweb port=80+443s ssl_certificate=/etc/ceph/private/keyandcert.pem
+
 
 Migrating from Apache to Civetweb
 ---------------------------------
@@ -265,26 +273,25 @@ On Ubuntu execute::
  sudo service radosgw restart id=rgw.<short-hostname>
 
 For federated configurations, each zone may have a different ``index_pool``
-setting for failover. To make the value consistent for a region's zones, you
-may set ``rgw_override_bucket_index_max_shards`` in a gateway's region
+setting for failover. To make the value consistent for a zonegroup's zones, you
+may set ``rgw_override_bucket_index_max_shards`` in a gateway's zonegroup
 configuration. For example::
 
-  radosgw-admin region get > region.json
+  radosgw-admin zonegroup get > zonegroup.json
 
-Open the ``region.json`` file and edit the ``bucket_index_max_shards`` setting
-for each named zone. Save the ``region.json`` file and reset the region. For
-example::
+Open the ``zonegroup.json`` file and edit the ``bucket_index_max_shards`` setting
+for each named zone. Save the ``zonegroup.json`` file and reset the zonegroup.
+For example::
 
-   radosgw-admin region set < region.json
+   radosgw-admin zonegroup set < zonegroup.json
 
-Once you have updated your region, update the region map. For example::
+Once you have updated your zonegroup, update and commit the period.
+For example::
 
-   radosgw-admin regionmap update --name client.rgw.ceph-client
-
-Where ``client.rgw.ceph-client`` is the name of the gateway user.
+   radosgw-admin period update --commit
 
 .. note:: Mapping the index pool (for each zone, if applicable) to a CRUSH
-          ruleset of SSD-based OSDs may also help with bucket index performance.
+          rule of SSD-based OSDs may also help with bucket index performance.
 
 Add Wildcard to DNS
 -------------------

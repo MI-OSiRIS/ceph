@@ -1,6 +1,7 @@
 """
 A RESTful API for Ceph
 """
+from __future__ import absolute_import
 
 import os
 import json
@@ -10,8 +11,10 @@ import inspect
 import tempfile
 import threading
 import traceback
+import socket
 
-import common
+from . import common
+from . import context
 
 from uuid import uuid4
 from pecan import jsonify, make_app
@@ -19,12 +22,18 @@ from OpenSSL import crypto
 from pecan.rest import RestController
 from werkzeug.serving import make_server, make_ssl_devcert
 
-from hooks import ErrorHook
+from .hooks import ErrorHook
 from mgr_module import MgrModule, CommandResult
 
-# Global instance to share
-instance = None
 
+try:
+    iteritems = dict.iteritems
+except:
+    iteritems = dict.items
+
+
+class CannotServe(Exception):
+    pass
 
 
 class CommandsRequest(object):
@@ -47,10 +56,8 @@ class CommandsRequest(object):
         self.id = str(id(self))
 
         # Filter out empty sub-requests
-        commands_arrays = filter(
-            lambda x: len(x) != 0,
-            commands_arrays,
-        )
+        commands_arrays = [x for x in commands_arrays
+                           if len(x) != 0]
 
         self.running = []
         self.waiting = commands_arrays[1:]
@@ -85,7 +92,7 @@ class CommandsRequest(object):
             results.append(result)
 
             # Run the command
-            instance.send_command(result, 'mon', '', json.dumps(commands[index]), tag)
+            context.instance.send_command(result, 'mon', '', json.dumps(commands[index]), tag)
 
         return results
 
@@ -173,11 +180,10 @@ class CommandsRequest(object):
                 self.finished
             ),
             'waiting': map(
-                lambda x: {
-                    'command': x.command,
-                    'outs': x.outs,
-                    'outb': x.outb,
-                },
+                lambda x: map(
+                    lambda y: common.humanify_command(y),
+                    x
+                ),
                 self.waiting
             ),
             'failed': map(
@@ -227,8 +233,7 @@ class Module(MgrModule):
 
     def __init__(self, *args, **kwargs):
         super(Module, self).__init__(*args, **kwargs)
-        global instance
-        instance = self
+        context.instance = self
 
         self.requests = []
         self.requests_lock = threading.RLock()
@@ -247,6 +252,8 @@ class Module(MgrModule):
             try:
                 self._serve()
                 self.server.socket.close()
+            except CannotServe as cs:
+                self.log.warn("server not running: %s", cs)
             except:
                 self.log.error(str(traceback.format_exc()))
 
@@ -257,7 +264,7 @@ class Module(MgrModule):
     def refresh_keys(self):
         self.keys = {}
         rawkeys = self.get_config_prefix('keys/') or {}
-        for k, v in rawkeys.iteritems():
+        for k, v in iteritems(rawkeys):
             self.keys[k[5:]] = v  # strip of keys/ prefix
 
     def _serve(self):
@@ -272,7 +279,8 @@ class Module(MgrModule):
 
         server_addr = self.get_localized_config('server_addr', '::')
         if server_addr is None:
-            raise RuntimeError('no server_addr configured; try "ceph config-key set mgr/restful/server_addr <ip>"')
+            raise CannotServe('no server_addr configured; try "ceph config-key set mgr/restful/server_addr <ip>"')
+
         server_port = int(self.get_localized_config('server_port', '8003'))
         self.log.info('server_addr: %s server_port: %d',
                       server_addr, server_port)
@@ -280,7 +288,7 @@ class Module(MgrModule):
         cert = self.get_localized_config("crt")
         if cert is not None:
             cert_tmp = tempfile.NamedTemporaryFile()
-            cert_tmp.write(cert)
+            cert_tmp.write(cert.encode('utf-8'))
             cert_tmp.flush()
             cert_fname = cert_tmp.name
         else:
@@ -289,18 +297,25 @@ class Module(MgrModule):
         pkey = self.get_localized_config("key")
         if pkey is not None:
             pkey_tmp = tempfile.NamedTemporaryFile()
-            pkey_tmp.write(pkey)
+            pkey_tmp.write(pkey.encode('utf-8'))
             pkey_tmp.flush()
             pkey_fname = pkey_tmp.name
         else:
             pkey_fname = self.get_localized_config('key_file')
 
         if not cert_fname or not pkey_fname:
-            raise RuntimeError('no certificate configured')
+            raise CannotServe('no certificate configured')
         if not os.path.isfile(cert_fname):
-            raise RuntimeError('certificate %s does not exist' % cert_fname)
+            raise CannotServe('certificate %s does not exist' % cert_fname)
         if not os.path.isfile(pkey_fname):
-            raise RuntimeError('private key %s does not exist' % pkey_fname)
+            raise CannotServe('private key %s does not exist' % pkey_fname)
+
+        # Publish the URI that others may use to access the service we're
+        # about to start serving
+        self.set_uri("https://{0}:{1}/".format(
+            socket.gethostname() if server_addr == "::" else server_addr,
+            server_port
+        ))
 
         # Create the HTTPS werkzeug server serving pecan app
         self.server = make_server(
@@ -349,10 +364,7 @@ class Module(MgrModule):
             if tag == 'seq':
                 return
 
-            request = filter(
-                lambda x: x.is_running(tag),
-                self.requests)
-
+            request = [x for x in self.requests if x.is_running(tag)]
             if len(request) != 1:
                 self.log.warn("Unknown request '%s'" % str(tag))
                 return
@@ -425,9 +437,8 @@ class Module(MgrModule):
 
         elif command['prefix'] == "restful create-self-signed-cert":
             cert, pkey = self.create_self_signed_cert()
-
-            self.set_config(self.get_mgr_id() + '/crt', cert)
-            self.set_config(self.get_mgr_id() + '/key', pkey)
+            self.set_config(self.get_mgr_id() + '/crt', cert.decode('utf-8'))
+            self.set_config(self.get_mgr_id() + '/key', pkey.decode('utf-8'))
 
             self.restart()
             return (
@@ -520,10 +531,7 @@ class Module(MgrModule):
 
         # Filter by osd ids
         if ids is not None:
-            osds = filter(
-                lambda x: str(x['osd']) in ids,
-                osds
-            )
+            osds = [x for x in osds if str(x['osd']) in ids]
 
         # Get list of pools per osd node
         pools_map = self.get_osd_pools()
@@ -549,19 +557,14 @@ class Module(MgrModule):
         # Filter by pool
         if pool_id:
             pool_id = int(pool_id)
-            osds = filter(
-                lambda x: pool_id in x['pools'],
-                osds
-            )
+            osds = [x for x in osds if pool_id in x['pools']]
 
         return osds
 
 
     def get_osd_by_id(self, osd_id):
-        osd = filter(
-            lambda x: x['osd'] == osd_id,
-            self.get('osd_map')['osds']
-        )
+        osd = [x for x in self.get('osd_map')['osds']
+               if x['osd'] == osd_id]
 
         if len(osd) != 1:
             return None
@@ -570,10 +573,8 @@ class Module(MgrModule):
 
 
     def get_pool_by_id(self, pool_id):
-        pool = filter(
-            lambda x: x['pool'] == pool_id,
-            self.get('osd_map')['pools'],
-        )
+        pool = [x for x in self.get('osd_map')['pools']
+                if x['pool'] == pool_id]
 
         if len(pool) != 1:
             return None

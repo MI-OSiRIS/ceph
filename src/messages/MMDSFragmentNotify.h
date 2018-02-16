@@ -20,7 +20,7 @@
 class MMDSFragmentNotify : public Message {
   inodeno_t ino;
   frag_t basefrag;
-  int8_t bits;
+  int8_t bits = 0;
 
  public:
   inodeno_t get_ino() { return ino; }
@@ -44,17 +44,18 @@ public:
   }
 
   void encode_payload(uint64_t features) override {
-    ::encode(ino, payload);
-    ::encode(basefrag, payload);
-    ::encode(bits, payload);
-    ::encode(basebl, payload);
+    using ceph::encode;
+    encode(ino, payload);
+    encode(basefrag, payload);
+    encode(bits, payload);
+    encode(basebl, payload);
   }
   void decode_payload() override {
     bufferlist::iterator p = payload.begin();
-    ::decode(ino, p);
-    ::decode(basefrag, p);
-    ::decode(bits, p);
-    ::decode(basebl, p);
+    decode(ino, p);
+    decode(basefrag, p);
+    decode(bits, p);
+    decode(basebl, p);
   }
   
 };

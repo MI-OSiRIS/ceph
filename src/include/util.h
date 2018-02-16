@@ -19,6 +19,8 @@
 
 int64_t unit_to_bytesize(string val, ostream *pss);
 
+std::string bytes2str(uint64_t count);
+
 struct ceph_data_stats
 {
   uint64_t byte_total;
@@ -43,19 +45,19 @@ struct ceph_data_stats
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(byte_total, bl);
-    ::encode(byte_used, bl);
-    ::encode(byte_avail, bl);
-    ::encode(avail_percent, bl);
+    encode(byte_total, bl);
+    encode(byte_used, bl);
+    encode(byte_avail, bl);
+    encode(avail_percent, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
-    ::decode(byte_total, p);
-    ::decode(byte_used, p);
-    ::decode(byte_avail, p);
-    ::decode(avail_percent, p);
+    decode(byte_total, p);
+    decode(byte_used, p);
+    decode(byte_avail, p);
+    decode(avail_percent, p);
     DECODE_FINISH(p);
   }
 

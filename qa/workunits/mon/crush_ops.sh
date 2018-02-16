@@ -1,6 +1,6 @@
-#!/bin/bash -x
+#!/usr/bin/env bash
 
-set -e
+set -ex
 
 function expect_false()
 {
@@ -20,12 +20,16 @@ ceph osd crush rule create-simple foo default host
 ceph osd crush rule create-simple bar default host
 
 # make sure we're at luminous+ before using crush device classes
-ceph osd require-osd-release luminous
+ceph osd require-osd-release mimic
 ceph osd crush rm-device-class all
 ceph osd crush set-device-class ssd osd.0
 ceph osd crush set-device-class hdd osd.1
 ceph osd crush rule create-replicated foo-ssd default host ssd
 ceph osd crush rule create-replicated foo-hdd default host hdd
+ceph osd crush rule ls-by-class ssd | grep 'foo-ssd'
+ceph osd crush rule ls-by-class ssd | expect_false grep 'foo-hdd'
+ceph osd crush rule ls-by-class hdd | grep 'foo-hdd'
+ceph osd crush rule ls-by-class hdd | expect_false grep 'foo-ssd'
 
 ceph osd erasure-code-profile set ec-foo-ssd crush-device-class=ssd m=2 k=2
 ceph osd pool create ec-foo 2 erasure ec-foo-ssd
@@ -33,6 +37,18 @@ ceph osd pool rm ec-foo ec-foo --yes-i-really-really-mean-it
 
 ceph osd crush rule ls | grep foo
 
+ceph osd crush rule rename foo foo-asdf
+ceph osd crush rule rename foo foo-asdf # idempotent
+ceph osd crush rule rename bar bar-asdf
+ceph osd crush rule ls | grep 'foo-asdf'
+ceph osd crush rule ls | grep 'bar-asdf'
+ceph osd crush rule rm foo 2>&1 | grep 'does not exist'
+ceph osd crush rule rm bar 2>&1 | grep 'does not exist'
+ceph osd crush rule rename foo-asdf foo
+ceph osd crush rule rename foo-asdf foo # idempotent
+ceph osd crush rule rename bar-asdf bar
+ceph osd crush rule ls | expect_false grep 'foo-asdf'
+ceph osd crush rule ls | expect_false grep 'bar-asdf'
 ceph osd crush rule rm foo
 ceph osd crush rule rm foo  # idempotent
 ceph osd crush rule rm bar
@@ -77,6 +93,14 @@ ceph osd tree | grep -c host1 | grep -q 0
 
 expect_false ceph osd crush rm bar   # not empty
 ceph osd crush unlink host2
+
+ceph osd crush add-bucket host-for-test host root=root-for-test rack=rack-for-test
+ceph osd tree | grep host-for-test
+ceph osd tree | grep rack-for-test
+ceph osd tree | grep root-for-test
+ceph osd crush rm host-for-test
+ceph osd crush rm rack-for-test
+ceph osd crush rm root-for-test
 
 # reference foo and bar with a rule
 ceph osd crush rule create-simple foo-rule foo host firstn
@@ -153,6 +177,37 @@ ceph osd crush weight-set rm barset
 ceph osd crush weight-set ls | grep -c barset | grep -q 0
 ceph osd crush weight-set create-compat
 ceph osd crush weight-set ls | grep '(compat)'
+ceph osd crush weight-set rm-compat
+
+# weight set vs device classes
+ceph osd pool create cool 2
+ceph osd pool create cold 2
+ceph osd pool set cold size 2
+ceph osd crush weight-set create-compat
+ceph osd crush weight-set create cool flat
+ceph osd crush weight-set create cold positional
+ceph osd crush rm-device-class osd.0
+ceph osd crush weight-set reweight-compat osd.0 10.5
+ceph osd crush weight-set reweight cool osd.0 11.5
+ceph osd crush weight-set reweight cold osd.0 12.5 12.4
+ceph osd crush set-device-class fish osd.0
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep fish | grep 10\\.
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep fish | grep 11\\.
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep fish | grep 12\\.
+ceph osd crush rm-device-class osd.0
+ceph osd crush set-device-class globster osd.0
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep globster | grep 10\\.
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep globster | grep 11\\.
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep globster | grep 12\\.
+ceph osd crush weight-set reweight-compat osd.0 7.5
+ceph osd crush weight-set reweight cool osd.0 8.5
+ceph osd crush weight-set reweight cold osd.0 6.5 6.6
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep globster | grep 7\\.
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep globster | grep 8\\.
+ceph osd crush tree --show-shadow | grep osd\\.0 | grep globster | grep 6\\.
+ceph osd crush rm-device-class osd.0
+ceph osd pool rm cool cool --yes-i-really-really-mean-it
+ceph osd pool rm cold cold --yes-i-really-really-mean-it
 ceph osd crush weight-set rm-compat
 
 echo OK

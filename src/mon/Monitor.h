@@ -37,7 +37,6 @@
 #include "Elector.h"
 #include "Paxos.h"
 #include "Session.h"
-#include "PGStatService.h"
 #include "MonCommand.h"
 
 #include "common/LogClient.h"
@@ -77,10 +76,6 @@ enum {
   l_cluster_num_object_misplaced,
   l_cluster_num_object_unfound,
   l_cluster_num_bytes,
-  l_cluster_num_mds_up,
-  l_cluster_num_mds_in,
-  l_cluster_num_mds_failed,
-  l_cluster_mds_epoch,
   l_cluster_last,
 };
 
@@ -169,15 +164,9 @@ public:
   vector<MonCommand> local_mon_commands;  // commands i support
   bufferlist local_mon_commands_bl;       // encoded version of above
 
-  // for upgrading mon cluster that still uses PGMonitor
-  vector<MonCommand> local_upgrading_mon_commands;  // mixed mon cluster commands
-  bufferlist local_upgrading_mon_commands_bl;       // encoded version of above
-
   Messenger *mgr_messenger;
   MgrClient mgr_client;
   uint64_t mgr_proxy_bytes = 0;  // in-flight proxied mgr command message bytes
-
-  const MonPGStatService *pgservice;
 
 private:
   void new_tick();
@@ -618,10 +607,6 @@ public:
    */
   vector<PaxosService*> paxos_service;
 
-  class PGMonitor *pgmon() {
-    return (class PGMonitor *)paxos_service[PAXOS_PGMAP];
-  }
-
   class MDSMonitor *mdsmon() {
     return (class MDSMonitor *)paxos_service[PAXOS_MDSMAP];
   }
@@ -650,19 +635,17 @@ public:
     return (class MgrStatMonitor*) paxos_service[PAXOS_MGRSTAT];
   }
 
-  class MgrStatMonitor *healthmon() {
-    return (class MgrStatMonitor*) paxos_service[PAXOS_MGRSTAT];
+  class HealthMonitor *healthmon() {
+    return (class HealthMonitor*) paxos_service[PAXOS_HEALTH];
   }
 
   friend class Paxos;
   friend class OSDMonitor;
   friend class MDSMonitor;
   friend class MonmapMonitor;
-  friend class PGMonitor;
   friend class LogMonitor;
   friend class ConfigKeyService;
 
-  QuorumService *health_monitor;
   QuorumService *config_key_service;
 
   // -- sessions --
@@ -735,16 +718,6 @@ public:
   void do_health_to_clog_interval();
   void do_health_to_clog(bool force = false);
 
-  /**
-   * Generate health report
-   *
-   * @param status one-line status summary
-   * @param detailbl optional bufferlist* to fill with a detailed report
-   * @returns health status
-   */
-  health_status_t get_health(list<string>& status, bufferlist *detailbl,
-                             Formatter *f);
-
   health_status_t get_health_status(
     bool want_detail,
     Formatter *f,
@@ -755,6 +728,25 @@ public:
     const health_check_map_t& updated,
     const health_check_map_t& previous,
     MonitorDBStore::TransactionRef t);
+
+protected:
+
+  class HealthCheckLogStatus {
+    public:
+    health_status_t severity;
+    std::string last_message;
+    utime_t updated_at = 0;
+    HealthCheckLogStatus(health_status_t severity_,
+                         const std::string &last_message_,
+                         utime_t updated_at_)
+      : severity(severity_),
+        last_message(last_message_),
+        updated_at(updated_at_)
+    {}
+  };
+  std::map<std::string, HealthCheckLogStatus> health_check_log_times;
+
+public:
 
   void get_cluster_status(stringstream &ss, Formatter *f);
 
@@ -963,20 +955,13 @@ private:
 public:
   static void format_command_descriptions(const std::vector<MonCommand> &commands,
 					  Formatter *f,
-					  bufferlist *rdata,
-					  bool hide_mgr_flag=false);
+					  bufferlist *rdata);
 
   const std::vector<MonCommand> &get_local_commands(mon_feature_t f) {
-    if (f.contains_all(ceph::features::mon::FEATURE_LUMINOUS))
-      return local_mon_commands;
-    else
-      return local_upgrading_mon_commands;
+    return local_mon_commands;
   }
   const bufferlist& get_local_commands_bl(mon_feature_t f) {
-    if (f.contains_all(ceph::features::mon::FEATURE_LUMINOUS))
-      return local_mon_commands_bl;
-    else
-      return local_upgrading_mon_commands_bl;
+    return local_mon_commands_bl;
   }
   void set_leader_commands(const std::vector<MonCommand>& cmds) {
     leader_mon_commands = cmds;
@@ -993,6 +978,8 @@ public:
 #define CEPH_MON_FEATURE_INCOMPAT_ERASURE_CODE_PLUGINS_V2 CompatSet::Feature(6, "support isa/lrc erasure code")
 #define CEPH_MON_FEATURE_INCOMPAT_ERASURE_CODE_PLUGINS_V3 CompatSet::Feature(7, "support shec erasure code")
 #define CEPH_MON_FEATURE_INCOMPAT_KRAKEN CompatSet::Feature(8, "support monmap features")
+#define CEPH_MON_FEATURE_INCOMPAT_LUMINOUS CompatSet::Feature(9, "luminous ondisk layout")
+#define CEPH_MON_FEATURE_INCOMPAT_MIMIC CompatSet::Feature(10, "mimic ondisk layout")
 // make sure you add your feature to Monitor::get_supported_features
 
 

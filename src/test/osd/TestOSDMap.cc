@@ -142,7 +142,6 @@ TEST_F(OSDMapTest, Features) {
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_TUNABLES2);
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_TUNABLES3);
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_V2);
-  ASSERT_TRUE(features & CEPH_FEATURE_OSD_ERASURE_CODES);
   ASSERT_TRUE(features & CEPH_FEATURE_OSDHASHPSPOOL);
   ASSERT_TRUE(features & CEPH_FEATURE_OSD_PRIMARY_AFFINITY);
 
@@ -152,7 +151,6 @@ TEST_F(OSDMapTest, Features) {
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_TUNABLES2);
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_TUNABLES3);
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_V2);
-  ASSERT_FALSE(features & CEPH_FEATURE_OSD_ERASURE_CODES);  // dont' need this
   ASSERT_TRUE(features & CEPH_FEATURE_OSDHASHPSPOOL);
   ASSERT_TRUE(features & CEPH_FEATURE_OSD_PRIMARY_AFFINITY);
 
@@ -169,7 +167,6 @@ TEST_F(OSDMapTest, Features) {
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_TUNABLES2);
   ASSERT_TRUE(features & CEPH_FEATURE_CRUSH_TUNABLES3); // shared bit with primary affinity
   ASSERT_FALSE(features & CEPH_FEATURE_CRUSH_V2);
-  ASSERT_FALSE(features & CEPH_FEATURE_OSD_ERASURE_CODES);
   ASSERT_TRUE(features & CEPH_FEATURE_OSDHASHPSPOOL);
   ASSERT_TRUE(features & CEPH_FEATURE_OSD_PRIMARY_AFFINITY);
 
@@ -446,6 +443,44 @@ TEST_F(OSDMapTest, PrimaryAffinity) {
   }
 }
 
+TEST_F(OSDMapTest, parse_osd_id_list) {
+  set_up_map();
+  set<int> out;
+  set<int> all;
+  osdmap.get_all_osds(all);
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"osd.0"}, &out, &cout));
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(0, *out.begin());
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"1"}, &out, &cout));
+  ASSERT_EQ(1u, out.size());
+  ASSERT_EQ(1, *out.begin());
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"osd.0","osd.1"}, &out, &cout));
+  ASSERT_EQ(2u, out.size());
+  ASSERT_EQ(0, *out.begin());
+  ASSERT_EQ(1, *out.rbegin());
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"osd.0","1"}, &out, &cout));
+  ASSERT_EQ(2u, out.size());
+  ASSERT_EQ(0, *out.begin());
+  ASSERT_EQ(1, *out.rbegin());
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"*"}, &out, &cout));
+  ASSERT_EQ(all.size(), out.size());
+  ASSERT_EQ(all, out);
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"all"}, &out, &cout));
+  ASSERT_EQ(all, out);
+
+  ASSERT_EQ(0, osdmap.parse_osd_id_list({"any"}, &out, &cout));
+  ASSERT_EQ(all, out);
+
+  ASSERT_EQ(-EINVAL, osdmap.parse_osd_id_list({"foo"}, &out, &cout));
+  ASSERT_EQ(-EINVAL, osdmap.parse_osd_id_list({"-12"}, &out, &cout));
+}
+
 TEST(PGTempMap, basic)
 {
   PGTempMap m;
@@ -461,3 +496,4 @@ TEST(PGTempMap, basic)
   ASSERT_EQ(m.find(b), m.end());
   ASSERT_EQ(998u, m.size());
 }
+

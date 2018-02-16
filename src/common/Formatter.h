@@ -23,20 +23,21 @@ namespace ceph {
 
   class Formatter {
   public:
-    static Formatter *create(const std::string& type,
-			     const std::string& default_type,
-			     const std::string& fallback);
-    static Formatter *create(const std::string& type,
-			     const std::string& default_type) {
+    static Formatter *create(std::string_view type,
+			     std::string_view default_type,
+			     std::string_view fallback);
+    static Formatter *create(std::string_view type,
+			     std::string_view default_type) {
       return create(type, default_type, "");
     }
-    static Formatter *create(const std::string& type) {
+    static Formatter *create(std::string_view type) {
       return create(type, "json-pretty", "");
     }
 
     Formatter();
     virtual ~Formatter();
 
+    virtual void enable_line_break() = 0;
     virtual void flush(std::ostream& os) = 0;
     void flush(bufferlist &bl);
     virtual void reset() = 0;
@@ -53,7 +54,7 @@ namespace ceph {
     virtual void dump_unsigned(const char *name, uint64_t u) = 0;
     virtual void dump_int(const char *name, int64_t s) = 0;
     virtual void dump_float(const char *name, double d) = 0;
-    virtual void dump_string(const char *name, const std::string& s) = 0;
+    virtual void dump_string(const char *name, std::string_view s) = 0;
     virtual void dump_bool(const char *name, bool b)
     {
       dump_format_unquoted(name, "%s", (b ? "true" : "false"));
@@ -80,7 +81,7 @@ namespace ceph {
     {
       open_object_section(name);
     }
-    virtual void dump_string_with_attrs(const char *name, const std::string& s, const FormatterAttrs& attrs)
+    virtual void dump_string_with_attrs(const char *name, std::string_view s, const FormatterAttrs& attrs)
     {
       dump_string(name, s);
     }
@@ -93,6 +94,7 @@ namespace ceph {
     void set_status(int status, const char* status_name) override {};
     void output_header() override {};
     void output_footer() override {};
+    void enable_line_break() override { m_line_break_enabled = true; }
     void flush(std::ostream& os) override;
     using Formatter::flush; // don't hide Formatter::flush(bufferlist &bl)
     void reset() override;
@@ -104,7 +106,7 @@ namespace ceph {
     void dump_unsigned(const char *name, uint64_t u) override;
     void dump_int(const char *name, int64_t u) override;
     void dump_float(const char *name, double d) override;
-    void dump_string(const char *name, const std::string& s) override;
+    void dump_string(const char *name, std::string_view s) override;
     std::ostream& dump_stream(const char *name) override;
     void dump_format_va(const char *name, const char *ns, bool quoted, const char *fmt, va_list ap) override;
     int get_len() const override;
@@ -120,7 +122,7 @@ namespace ceph {
 
     bool m_pretty;
     void open_section(const char *name, bool is_array);
-    void print_quoted_string(const std::string& s);
+    void print_quoted_string(std::string_view s);
     void print_name(const char *name);
     void print_comma(json_formatter_stack_entry_d& entry);
     void finish_pending_string();
@@ -128,6 +130,7 @@ namespace ceph {
     std::stringstream m_ss, m_pending_string;
     std::list<json_formatter_stack_entry_d> m_stack;
     bool m_is_pending_string;
+    bool m_line_break_enabled = false;
   };
 
   class XMLFormatter : public Formatter {
@@ -139,6 +142,7 @@ namespace ceph {
     void output_header() override;
     void output_footer() override;
 
+    void enable_line_break() override { m_line_break_enabled = true; }
     void flush(std::ostream& os) override;
     using Formatter::flush; // don't hide Formatter::flush(bufferlist &bl)
     void reset() override;
@@ -150,7 +154,7 @@ namespace ceph {
     void dump_unsigned(const char *name, uint64_t u) override;
     void dump_int(const char *name, int64_t u) override;
     void dump_float(const char *name, double d) override;
-    void dump_string(const char *name, const std::string& s) override;
+    void dump_string(const char *name, std::string_view s) override;
     std::ostream& dump_stream(const char *name) override;
     void dump_format_va(const char *name, const char *ns, bool quoted, const char *fmt, va_list ap) override;
     int get_len() const override;
@@ -159,13 +163,13 @@ namespace ceph {
     /* with attrs */
     void open_array_section_with_attrs(const char *name, const FormatterAttrs& attrs) override;
     void open_object_section_with_attrs(const char *name, const FormatterAttrs& attrs) override;
-    void dump_string_with_attrs(const char *name, const std::string& s, const FormatterAttrs& attrs) override;
+    void dump_string_with_attrs(const char *name, std::string_view s, const FormatterAttrs& attrs) override;
 
   protected:
     void open_section_in_ns(const char *name, const char *ns, const FormatterAttrs *attrs);
     void finish_pending_string();
     void print_spaces();
-    static std::string escape_xml_str(const char *str);
+    static std::string escape_xml_str(std::string_view str);
     void get_attrs_str(const FormatterAttrs *attrs, std::string& attrs_str);
     char to_lower_underscore(char c) const;
 
@@ -176,6 +180,7 @@ namespace ceph {
     const bool m_underscored;
     std::string m_pending_string_name;
     bool m_header_done;
+    bool m_line_break_enabled = false;
   };
 
   class TableFormatter : public Formatter {
@@ -185,6 +190,7 @@ namespace ceph {
     void set_status(int status, const char* status_name) override {};
     void output_header() override {};
     void output_footer() override {};
+    void enable_line_break() override {};
     void flush(std::ostream& os) override;
     using Formatter::flush; // don't hide Formatter::flush(bufferlist &bl)
     void reset() override;
@@ -200,9 +206,9 @@ namespace ceph {
     void dump_unsigned(const char *name, uint64_t u) override;
     void dump_int(const char *name, int64_t u) override;
     void dump_float(const char *name, double d) override;
-    void dump_string(const char *name, const std::string& s) override;
+    void dump_string(const char *name, std::string_view s) override;
     void dump_format_va(const char *name, const char *ns, bool quoted, const char *fmt, va_list ap) override;
-    void dump_string_with_attrs(const char *name, const std::string& s, const FormatterAttrs& attrs) override;
+    void dump_string_with_attrs(const char *name, std::string_view s, const FormatterAttrs& attrs) override;
     std::ostream& dump_stream(const char *name) override;
 
     int get_len() const override;

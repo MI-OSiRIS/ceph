@@ -6,8 +6,9 @@ if [ ! -e Makefile -o ! -d bin ]; then
     exit 1
 fi
 
-if [ ! -d /tmp/ceph-disk-virtualenv -o ! -d /tmp/ceph-detect-init-virtualenv ]; then
-    echo '/tmp/*-virtualenv directories not built'
+TEMP_DIR=${TMPDIR:-/tmp}
+if [ ! -d $TEMP_DIR/ceph-disk-virtualenv -o ! -d $TEMP_DIR/ceph-detect-init-virtualenv ]; then
+    echo '/tmp/*-virtualenv directories not built. Please run "make check" first.'
     exit 1
 fi
 
@@ -23,6 +24,15 @@ else
     KERNCORE="kernel.core_pattern"
     COREPATTERN="core.%e.%p.%t"
 fi
+
+function finish() {
+    if [ -n "$precore" ]; then
+        sudo sysctl -w ${KERNCORE}=${precore}
+    fi
+    exit 0
+}
+
+trap finish TERM HUP INT
 
 PATH=$(pwd)/bin:$PATH
 
@@ -46,7 +56,12 @@ count=0
 errors=0
 userargs=""
 precore="$(sysctl -n $KERNCORE)"
-sudo sysctl -w ${KERNCORE}=${COREPATTERN}
+# If corepattern already set, avoid having to use sudo
+if [ "$precore" = "$COREPATTERN" ]; then
+    precore=""
+else
+    sudo sysctl -w ${KERNCORE}=${COREPATTERN}
+fi
 ulimit -c unlimited
 for f in $(cd $location ; find . -perm $exec_mode -type f)
 do
@@ -96,7 +111,9 @@ do
         fi
     fi
 done
-sudo sysctl -w ${KERNCORE}=${precore}
+if [ -n "$precore" ]; then
+    sudo sysctl -w ${KERNCORE}=${precore}
+fi
 
 if [ "$errors" != "0" ]; then
     echo "$errors TESTS FAILED, $count TOTAL TESTS"

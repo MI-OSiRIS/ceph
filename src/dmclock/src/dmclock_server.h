@@ -66,15 +66,15 @@ namespace crimson {
     constexpr uint tag_modulo = 1000000;
 
     struct ClientInfo {
-      const double reservation;  // minimum
-      const double weight;       // proportional
-      const double limit;        // maximum
+      double reservation;  // minimum
+      double weight;       // proportional
+      double limit;        // maximum
 
       // multiplicative inverses of above, which we use in calculations
       // and don't want to recalculate repeatedly
-      const double reservation_inv;
-      const double weight_inv;
-      const double limit_inv;
+      double reservation_inv;
+      double weight_inv;
+      double limit_inv;
 
       // order parameters -- min, "normal", max
       ClientInfo(double _reservation, double _weight, double _limit) :
@@ -109,36 +109,38 @@ namespace crimson {
       double proportion;
       double limit;
       bool   ready; // true when within limit
-#ifndef DO_NOT_DELAY_TAG_CALC
       Time   arrival;
-#endif
 
       RequestTag(const RequestTag& prev_tag,
 		 const ClientInfo& client,
 		 const uint32_t delta,
 		 const uint32_t rho,
 		 const Time time,
-		 const double cost = 0.0) :
-	reservation(cost + tag_calc(time,
-				    prev_tag.reservation,
-				    client.reservation_inv,
-				    rho,
-				    true)),
-	proportion(tag_calc(time,
-			    prev_tag.proportion,
-			    client.weight_inv,
-			    delta,
-			    true)),
-	limit(tag_calc(time,
-		       prev_tag.limit,
-		       client.limit_inv,
-		       delta,
-		       false)),
-	ready(false)
-#ifndef DO_NOT_DELAY_TAG_CALC
-	, arrival(time)
-#endif
+		 const double cost = 0.0,
+		 const double anticipation_timeout = 0.0) :
+	ready(false),
+	arrival(time)
       {
+	Time max_time = time;
+	if (time - anticipation_timeout < prev_tag.arrival)
+	  max_time -= anticipation_timeout;
+	
+	reservation = cost + tag_calc(max_time,
+				      prev_tag.reservation,
+				      client.reservation_inv,
+				      rho,
+				      true);
+	proportion = tag_calc(max_time,
+			      prev_tag.proportion,
+			      client.weight_inv,
+			      delta,
+			      true);
+	limit = tag_calc(max_time,
+			 prev_tag.limit,
+			 client.limit_inv,
+			 delta,
+			 false);
+
 	assert(reservation < max_tag || proportion < max_tag);
       }
 
@@ -146,18 +148,18 @@ namespace crimson {
 		 const ClientInfo& client,
 		 const ReqParams req_params,
 		 const Time time,
-		 const double cost = 0.0) :
-	RequestTag(prev_tag, client, req_params.delta, req_params.rho, time, cost)
+		 const double cost = 0.0,
+		 const double anticipation_timeout = 0.0) :
+	RequestTag(prev_tag, client, req_params.delta, req_params.rho, time,
+		   cost, anticipation_timeout)
       { /* empty */ }
 
       RequestTag(double _res, double _prop, double _lim, const Time _arrival) :
 	reservation(_res),
 	proportion(_prop),
 	limit(_lim),
-	ready(false)
-#ifndef DO_NOT_DELAY_TAG_CALC
-	, arrival(_arrival)
-#endif
+	ready(false),
+	arrival(_arrival)
       {
 	assert(reservation < max_tag || proportion < max_tag);
       }
@@ -166,10 +168,8 @@ namespace crimson {
 	reservation(other.reservation),
 	proportion(other.proportion),
 	limit(other.limit),
-	ready(other.ready)
-#ifndef DO_NOT_DELAY_TAG_CALC
-	, arrival(other.arrival)
-#endif
+	ready(other.ready),
+	arrival(other.arrival)
       {
 	// empty
       }
@@ -229,9 +229,10 @@ namespace crimson {
     }; // class RequestTag
 
 
-    // C is client identifier type, R is request type, B is heap
-    // branching factor
-    template<typename C, typename R, uint B>
+    // C is client identifier type, R is request type,
+    // U1 determines whether to use client information function dynamically,
+    // B is heap branching factor
+    template<typename C, typename R, bool U1, uint B>
     class PriorityQueueBase {
       // we don't want to include gtest.h just for FRIEND_TEST
       friend class dmclock_server_client_idle_erase_Test;
@@ -285,7 +286,7 @@ namespace crimson {
       // ClientRec could be "protected" with no issue. [See comments
       // associated with function submit_top_request.]
       class ClientRec {
-	friend PriorityQueueBase<C,R,B>;
+	friend PriorityQueueBase<C,R,U1,B>;
 
 	C                     client;
 	RequestTag            prev_tag;
@@ -295,23 +296,23 @@ namespace crimson {
 	// an idle client becoming unidle
 	double                prop_delta = 0.0;
 
-	c::IndIntruHeapData   reserv_heap_data;
-	c::IndIntruHeapData   lim_heap_data;
-	c::IndIntruHeapData   ready_heap_data;
+	c::IndIntruHeapData   reserv_heap_data {};
+	c::IndIntruHeapData   lim_heap_data {};
+	c::IndIntruHeapData   ready_heap_data {};
 #if USE_PROP_HEAP
-	c::IndIntruHeapData   prop_heap_data;
+	c::IndIntruHeapData   prop_heap_data {};
 #endif
 
       public:
 
-	ClientInfo            info;
+	const ClientInfo*     info;
 	bool                  idle;
 	Counter               last_tick;
 	uint32_t              cur_rho;
 	uint32_t              cur_delta;
 
 	ClientRec(C _client,
-		  const ClientInfo& _info,
+		  const ClientInfo* _info,
 		  Counter current_tick) :
 	  client(_client),
 	  prev_tag(0.0, 0.0, 0.0, TimeZero),
@@ -339,6 +340,7 @@ namespace crimson {
 	  assign_unpinned_tag(prev_tag.reservation, _prev.reservation);
 	  assign_unpinned_tag(prev_tag.limit, _prev.limit);
 	  assign_unpinned_tag(prev_tag.proportion, _prev.proportion);
+	  prev_tag.arrival = _prev.arrival;
 	  last_tick = _tick;
 	}
 
@@ -414,7 +416,7 @@ namespace crimson {
 
 	friend std::ostream&
 	operator<<(std::ostream& out,
-		   const typename PriorityQueueBase<C,R,B>::ClientRec& e) {
+		   const typename PriorityQueueBase<C,R,U1,B>::ClientRec& e) {
 	  out << "{ ClientRec::" <<
 	    " client:" << e.client <<
 	    " prev_tag:" << e.prev_tag <<
@@ -448,11 +450,31 @@ namespace crimson {
 	  HeapId    heap_id;
 	  Time      when_ready;
 	};
+
+	inline explicit NextReq() :
+	  type(NextReqType::none)
+	{ }
+
+	inline NextReq(HeapId _heap_id) :
+	  type(NextReqType::returning),
+	  heap_id(_heap_id)
+	{ }
+
+	inline NextReq(Time _when_ready) :
+	  type(NextReqType::future),
+	  when_ready(_when_ready)
+	{ }
+
+	// calls to this are clearer than calls to the default
+	// constructor
+	static inline NextReq none() {
+	  return NextReq();
+	}
       };
 
 
       // a function that can be called to look up client information
-      using ClientInfoFunc = std::function<ClientInfo(const C&)>;
+      using ClientInfoFunc = std::function<const ClientInfo*(const C&)>;
 
 
       bool empty() const {
@@ -540,6 +562,24 @@ namespace crimson {
 
       uint get_heap_branching_factor() const {
 	return B;
+      }
+
+
+      void update_client_info(const C& client_id) {
+	DataGuard g(data_mtx);
+	auto client_it = client_map.find(client_id);
+	if (client_map.end() != client_it) {
+	  ClientRec& client = (*client_it->second);
+	  client.info = client_info_f(client_id);
+	}
+      }
+
+
+      void update_client_infos() {
+	DataGuard g(data_mtx);
+	for (auto i : client_map) {
+	  i.second->info = client_info_f(i.second->client);
+	}
       }
 
 
@@ -651,7 +691,8 @@ namespace crimson {
 	}
       };
 
-      ClientInfoFunc       client_info_f;
+      ClientInfoFunc        client_info_f;
+      static constexpr bool is_dynamic_cli_info_f = U1;
 
       mutable std::mutex data_mtx;
       using DataGuard = std::lock_guard<decltype(data_mtx)>;
@@ -694,6 +735,7 @@ namespace crimson {
       // limit, this will allow the request next in terms of
       // proportion to still get issued
       bool             allow_limit_break;
+      double           anticipation_timeout;
 
       std::atomic_bool finishing;
 
@@ -722,9 +764,11 @@ namespace crimson {
 			std::chrono::duration<Rep,Per> _idle_age,
 			std::chrono::duration<Rep,Per> _erase_age,
 			std::chrono::duration<Rep,Per> _check_time,
-			bool _allow_limit_break) :
+			bool _allow_limit_break,
+			double _anticipation_timeout) :
 	client_info_f(_client_info_f),
 	allow_limit_break(_allow_limit_break),
+	anticipation_timeout(_anticipation_timeout),
 	finishing(false),
 	idle_age(std::chrono::duration_cast<Duration>(_idle_age)),
 	erase_age(std::chrono::duration_cast<Duration>(_erase_age)),
@@ -744,6 +788,14 @@ namespace crimson {
       }
 
 
+      inline const ClientInfo* get_cli_info(ClientRec& client) const {
+	if (is_dynamic_cli_info_f) {
+	  client.info = client_info_f(client.client);
+	}
+	return client.info;
+      }
+
+
       // data_mtx must be held by caller
       void do_add_request(RequestRef&& request,
 			  const C& client_id,
@@ -760,7 +812,7 @@ namespace crimson {
 	if (client_map.end() != client_it) {
 	  temp_client = &(*client_it->second); // address of obj of shared_ptr
 	} else {
-	  ClientInfo info = client_info_f(client_id);
+	  const ClientInfo* info = client_info_f(client_id);
 	  ClientRecRef client_rec =
 	    std::make_shared<ClientRec>(client_id, info, tick);
 	  resv_heap.push(client_rec);
@@ -830,17 +882,28 @@ namespace crimson {
 	RequestTag tag(0, 0, 0, time);
 
 	if (!client.has_request()) {
+	  const ClientInfo* client_info = get_cli_info(client);
+	  assert(client_info);
 	  tag = RequestTag(client.get_req_tag(),
-			   client.info,
+			   *client_info,
 			   req_params,
 			   time,
-			   cost);
+			   cost,
+                           anticipation_timeout);
 
 	  // copy tag to previous tag for client
 	  client.update_req_tag(tag, tick);
 	}
 #else
-	RequestTag tag(client.get_req_tag(), client.info, req_params, time, cost);
+	const ClientInfo* client_info = get_cli_info(client);
+	assert(client_info);
+	RequestTag tag(client.get_req_tag(),
+		       *client_info,
+		       req_params,
+		       time,
+		       cost,
+		       anticipation_timeout);
+
 	// copy tag to previous tag for client
 	client.update_req_tag(tag, tick);
 #endif
@@ -890,9 +953,12 @@ namespace crimson {
 #ifndef DO_NOT_DELAY_TAG_CALC
 	if (top.has_request()) {
 	  ClientReq& next_first = top.next_request();
-	  next_first.tag = RequestTag(tag, top.info,
+	  const ClientInfo* client_info = get_cli_info(top);
+	  assert(client_info);
+	  next_first.tag = RequestTag(tag, *client_info,
 				      top.cur_delta, top.cur_rho,
-				      next_first.tag.arrival);
+				      next_first.tag.arrival,
+                                      0.0, anticipation_timeout);
 
   	  // copy tag to previous tag for client
 	  top.update_req_tag(next_first.tag, tick);
@@ -914,7 +980,7 @@ namespace crimson {
       // data_mtx should be held when called
       void reduce_reservation_tags(ClientRec& client) {
 	for (auto& r : client.requests) {
-	  r.tag.reservation -= client.info.reservation_inv;
+	  r.tag.reservation -= client.info->reservation_inv;
 
 #ifndef DO_NOT_DELAY_TAG_CALC
 	  // reduce only for front tag. because next tags' value are invalid
@@ -922,7 +988,7 @@ namespace crimson {
 #endif
 	}
 	// don't forget to update previous tag
-	client.prev_tag.reservation -= client.info.reservation_inv;
+	client.prev_tag.reservation -= client.info->reservation_inv;
 	resv_heap.promote(client);
       }
 
@@ -940,12 +1006,10 @@ namespace crimson {
 
       // data_mtx should be held when called
       NextReq do_next_request(Time now) {
-	NextReq result;
-
-	// if reservation queue is empty, all are empty (i.e., no active clients)
+	// if reservation queue is empty, all are empty (i.e., no
+	// active clients)
 	if(resv_heap.empty()) {
-	  result.type = NextReqType::none;
-	  return result;
+	  return NextReq::none();
 	}
 
 	// try constraint (reservation) based scheduling
@@ -953,9 +1017,7 @@ namespace crimson {
 	auto& reserv = resv_heap.top();
 	if (reserv.has_request() &&
 	    reserv.next_request().tag.reservation <= now) {
-	  result.type = NextReqType::returning;
-	  result.heap_id = HeapId::reservation;
-	  return result;
+	  return NextReq(HeapId::reservation);
 	}
 
 	// no existing reservations before now, so try weight-based
@@ -978,9 +1040,7 @@ namespace crimson {
 	if (readys.has_request() &&
 	    readys.next_request().tag.ready &&
 	    readys.next_request().tag.proportion < max_tag) {
-	  result.type = NextReqType::returning;
-	  result.heap_id = HeapId::ready;
-	  return result;
+	  return NextReq(HeapId::ready);
 	}
 
 	// if nothing is schedulable by reservation or
@@ -990,14 +1050,10 @@ namespace crimson {
 	if (allow_limit_break) {
 	  if (readys.has_request() &&
 	      readys.next_request().tag.proportion < max_tag) {
-	    result.type = NextReqType::returning;
-	    result.heap_id = HeapId::ready;
-	    return result;
+	    return NextReq(HeapId::ready);
 	  } else if (reserv.has_request() &&
 		     reserv.next_request().tag.reservation < max_tag) {
-	    result.type = NextReqType::returning;
-	    result.heap_id = HeapId::reservation;
-	    return result;
+	    return NextReq(HeapId::reservation);
 	  }
 	}
 
@@ -1016,12 +1072,9 @@ namespace crimson {
 	  next_call = min_not_0_time(next_call, next.tag.limit);
 	}
 	if (next_call < TimeMax) {
-	  result.type = NextReqType::future;
-	  result.when_ready = next_call;
-	  return result;
+	  return NextReq(next_call);
 	} else {
-	  result.type = NextReqType::none;
-	  return result;
+	  return NextReq::none();
 	}
       } // do_next_request
 
@@ -1102,9 +1155,9 @@ namespace crimson {
     }; // class PriorityQueueBase
 
 
-    template<typename C, typename R, uint B=2>
-    class PullPriorityQueue : public PriorityQueueBase<C,R,B> {
-      using super = PriorityQueueBase<C,R,B>;
+    template<typename C, typename R, bool U1=false, uint B=2>
+    class PullPriorityQueue : public PriorityQueueBase<C,R,U1,B> {
+      using super = PriorityQueueBase<C,R,U1,B>;
 
     public:
 
@@ -1141,10 +1194,11 @@ namespace crimson {
 			std::chrono::duration<Rep,Per> _idle_age,
 			std::chrono::duration<Rep,Per> _erase_age,
 			std::chrono::duration<Rep,Per> _check_time,
-			bool _allow_limit_break = false) :
+			bool _allow_limit_break = false,
+			double _anticipation_timeout = 0.0) :
 	super(_client_info_f,
 	      _idle_age, _erase_age, _check_time,
-	      _allow_limit_break)
+	      _allow_limit_break, _anticipation_timeout)
       {
 	// empty
       }
@@ -1152,12 +1206,14 @@ namespace crimson {
 
       // pull convenience constructor
       PullPriorityQueue(typename super::ClientInfoFunc _client_info_f,
-			bool _allow_limit_break = false) :
+			bool _allow_limit_break = false,
+			double _anticipation_timeout = 0.0) :
 	PullPriorityQueue(_client_info_f,
 			  std::chrono::minutes(10),
 			  std::chrono::minutes(15),
 			  std::chrono::minutes(6),
-			  _allow_limit_break)
+			  _allow_limit_break,
+			  _anticipation_timeout)
       {
 	// empty
       }
@@ -1318,12 +1374,12 @@ namespace crimson {
 
 
     // PUSH version
-    template<typename C, typename R, uint B=2>
-    class PushPriorityQueue : public PriorityQueueBase<C,R,B> {
+    template<typename C, typename R, bool U1=false, uint B=2>
+    class PushPriorityQueue : public PriorityQueueBase<C,R,U1,B> {
 
     protected:
 
-      using super = PriorityQueueBase<C,R,B>;
+      using super = PriorityQueueBase<C,R,U1,B>;
 
     public:
 
@@ -1365,10 +1421,11 @@ namespace crimson {
 			std::chrono::duration<Rep,Per> _idle_age,
 			std::chrono::duration<Rep,Per> _erase_age,
 			std::chrono::duration<Rep,Per> _check_time,
-			bool _allow_limit_break = false) :
+			bool _allow_limit_break = false,
+			double anticipation_timeout = 0.0) :
 	super(_client_info_f,
 	      _idle_age, _erase_age, _check_time,
-	      _allow_limit_break)
+	      _allow_limit_break, anticipation_timeout)
       {
 	can_handle_f = _can_handle_f;
 	handle_f = _handle_f;
@@ -1380,14 +1437,16 @@ namespace crimson {
       PushPriorityQueue(typename super::ClientInfoFunc _client_info_f,
 			CanHandleRequestFunc _can_handle_f,
 			HandleRequestFunc _handle_f,
-			bool _allow_limit_break = false) :
+			bool _allow_limit_break = false,
+			double _anticipation_timeout = 0.0) :
 	PushPriorityQueue(_client_info_f,
 			  _can_handle_f,
 			  _handle_f,
 			  std::chrono::minutes(10),
 			  std::chrono::minutes(15),
 			  std::chrono::minutes(6),
-			  _allow_limit_break)
+			  _allow_limit_break,
+			  _anticipation_timeout)
       {
 	// empty
       }

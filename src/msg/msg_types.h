@@ -22,6 +22,8 @@
 #include "include/blobhash.h"
 #include "include/encoding.h"
 
+#define MAX_PORT_NUMBER 65535
+
 namespace ceph {
   class Formatter;
 }
@@ -148,39 +150,6 @@ namespace std {
   };
 } // namespace std
 
-/*
- * an entity's network address.
- * includes a random value that prevents it from being reused.
- * thus identifies a particular process instance.
- * ipv4 for now.
- */
-
-#if defined(__linux__) || defined(DARWIN) || defined(__FreeBSD__)
-/*
- * encode sockaddr.ss_family as network byte order 
- */
-static inline void encode(const sockaddr_storage& a, bufferlist& bl) {
-  struct sockaddr_storage ss = a;
-#if defined(DARWIN) || defined(__FreeBSD__)
-  unsigned short *ss_family = reinterpret_cast<unsigned short*>(&ss);
-  *ss_family = htons(a.ss_family);
-#else
-  ss.ss_family = htons(ss.ss_family);
-#endif
-  ::encode_raw(ss, bl);
-}
-static inline void decode(sockaddr_storage& a, bufferlist::iterator& bl) {
-  ::decode_raw(a, bl);
-#if defined(DARWIN) || defined(__FreeBSD__)
-  unsigned short *ss_family = reinterpret_cast<unsigned short *>(&a);
-  a.ss_family = ntohs(*ss_family);
-  a.ss_len = 0;
-#else
-  a.ss_family = ntohs(a.ss_family);
-#endif
-}
-#endif
-
 // define a wire format for sockaddr that matches Linux's.
 struct ceph_sockaddr_storage {
   __le16 ss_family;
@@ -201,6 +170,63 @@ struct ceph_sockaddr_storage {
 } __attribute__ ((__packed__));
 WRITE_CLASS_ENCODER(ceph_sockaddr_storage)
 
+/*
+ * encode sockaddr.ss_family as network byte order
+ */
+static inline void encode(const sockaddr_storage& a, bufferlist& bl) {
+#if defined(__linux__)
+  struct sockaddr_storage ss = a;
+  ss.ss_family = htons(ss.ss_family);
+  ::encode_raw(ss, bl);
+#elif defined(__FreeBSD__) || defined(__APPLE__)
+  ceph_sockaddr_storage ss{};
+  auto src = (unsigned char const *)&a;
+  auto dst = (unsigned char *)&ss;
+  src += sizeof(a.ss_len);
+  ss.ss_family = a.ss_family;
+  src += sizeof(a.ss_family);
+  dst += sizeof(ss.ss_family);
+  const auto copy_size = std::min((unsigned char*)(&a + 1) - src,
+				  (unsigned char*)(&ss + 1) - dst);
+  ::memcpy(dst, src, copy_size);
+  encode(ss, bl);
+#else
+  ceph_sockaddr_storage ss{};
+  ::memset(&ss, '\0', sizeof(ss));
+  ::memcpy(&wireaddr, &ss, std::min(sizeof(ss), sizeof(a)));
+  encode(ss, bl);
+#endif
+}
+static inline void decode(sockaddr_storage& a, bufferlist::iterator& bl) {
+#if defined(__linux__)
+  ::decode_raw(a, bl);
+  a.ss_family = ntohs(a.ss_family);
+#elif defined(__FreeBSD__) || defined(__APPLE__)
+  ceph_sockaddr_storage ss{};
+  decode(ss, bl);
+  auto src = (unsigned char const *)&ss;
+  auto dst = (unsigned char *)&a;
+  a.ss_len = 0;
+  dst += sizeof(a.ss_len);
+  a.ss_family = ss.ss_family;
+  src += sizeof(ss.ss_family);
+  dst += sizeof(a.ss_family);
+  auto const copy_size = std::min((unsigned char*)(&ss + 1) - src,
+				  (unsigned char*)(&a + 1) - dst);
+  ::memcpy(dst, src, copy_size);
+#else
+  ceph_sockaddr_storage ss{};
+  decode(ss, bl);
+  ::memcpy(&a, &ss, std::min(sizeof(ss), sizeof(a)));
+#endif
+}
+
+/*
+ * an entity's network address.
+ * includes a random value that prevents it from being reused.
+ * thus identifies a particular process instance.
+ * ipv4 for now.
+ */
 struct entity_addr_t {
   typedef enum {
     TYPE_NONE = 0,
@@ -384,26 +410,21 @@ struct entity_addr_t {
     }
   }
 
+  std::string ip_only_to_str() const;
+
   bool parse(const char *s, const char **end = 0);
 
   void decode_legacy_addr_after_marker(bufferlist::iterator& bl)
   {
+    using ceph::decode;
     __u8 marker;
     __u16 rest;
-    ::decode(marker, bl);
-    ::decode(rest, bl);
+    decode(marker, bl);
+    decode(rest, bl);
     type = TYPE_LEGACY;
-    ::decode(nonce, bl);
+    decode(nonce, bl);
     sockaddr_storage ss;
-#if defined(__linux__) || defined(DARWIN) || defined(__FreeBSD__)
-    ::decode(ss, bl);
-#else
-    ceph_sockaddr_storage wireaddr;
-    ::memset(&wireaddr, '\0', sizeof(wireaddr));
-    ::decode(wireaddr, bl);
-    unsigned copysize = MIN(sizeof(wireaddr), sizeof(ss));
-    ::memcpy(&ss, &wireaddr, copysize);
-#endif
+    decode(ss, bl);
     set_sockaddr((sockaddr*)&ss);
   }
 
@@ -412,36 +433,36 @@ struct entity_addr_t {
   // broader study
 
   void encode(bufferlist& bl, uint64_t features) const {
+    using ceph::encode;
     if ((features & CEPH_FEATURE_MSG_ADDR2) == 0) {
-      ::encode((__u32)0, bl);
-      ::encode(nonce, bl);
+      encode((__u32)0, bl);
+      encode(nonce, bl);
       sockaddr_storage ss = get_sockaddr_storage();
-#if defined(__linux__) || defined(DARWIN) || defined(__FreeBSD__)
-      ::encode(ss, bl);
-#else
-      ceph_sockaddr_storage wireaddr;
-      ::memset(&wireaddr, '\0', sizeof(wireaddr));
-      unsigned copysize = MIN(sizeof(wireaddr), sizeof(ss));
-      // ceph_sockaddr_storage is in host byte order
-      ::memcpy(&wireaddr, &ss, copysize);
-      ::encode(wireaddr, bl);
-#endif
+      encode(ss, bl);
       return;
     }
-    ::encode((__u8)1, bl);
+    encode((__u8)1, bl);
     ENCODE_START(1, 1, bl);
-    ::encode(type, bl);
-    ::encode(nonce, bl);
+    encode(type, bl);
+    encode(nonce, bl);
     __u32 elen = get_sockaddr_len();
-    ::encode(elen, bl);
+    encode(elen, bl);
     if (elen) {
+#if (__FreeBSD__) || defined(__APPLE__)
+      __le16 ss_family = u.sa.sa_family;
+      encode(ss_family, bl);
+      bl.append(u.sa.sa_data,
+		elen - sizeof(u.sa.sa_len) - sizeof(u.sa.sa_family));
+#else
       bl.append((char*)get_sockaddr(), elen);
+#endif
     }
     ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator& bl) {
+    using ceph::decode;
     __u8 marker;
-    ::decode(marker, bl);
+    decode(marker, bl);
     if (marker == 0) {
       decode_legacy_addr_after_marker(bl);
       return;
@@ -449,12 +470,35 @@ struct entity_addr_t {
     if (marker != 1)
       throw buffer::malformed_input("entity_addr_t marker != 1");
     DECODE_START(1, bl);
-    ::decode(type, bl);
-    ::decode(nonce, bl);
+    decode(type, bl);
+    decode(nonce, bl);
     __u32 elen;
-    ::decode(elen, bl);
+    decode(elen, bl);
     if (elen) {
-      bl.copy(elen, (char*)get_sockaddr());
+#if defined(__FreeBSD__) || defined(__APPLE__)
+      u.sa.sa_len = 0;
+      __le16 ss_family;
+      if (elen < sizeof(ss_family)) {
+	throw buffer::malformed_input("elen smaller than family len");
+      }
+      decode(ss_family, bl);
+      u.sa.sa_family = ss_family;
+      elen -= sizeof(ss_family);
+      if (elen > get_sockaddr_len() - sizeof(u.sa.sa_family)) {
+	throw buffer::malformed_input("elen exceeds sockaddr len");
+      }
+      bl.copy(elen, u.sa.sa_data);
+#else
+      if (elen < sizeof(u.sa.sa_family)) {
+	throw buffer::malformed_input("elen smaller than family len");
+      }
+      bl.copy(sizeof(u.sa.sa_family), (char*)&u.sa.sa_family);
+      if (elen > get_sockaddr_len()) {
+	throw buffer::malformed_input("elen exceeds sockaddr len");
+      }
+      elen -= sizeof(u.sa.sa_family);
+      bl.copy(elen, u.sa.sa_data);
+#endif
     }
     DECODE_FINISH(bl);
   }
@@ -515,12 +559,14 @@ struct entity_inst_t {
   }
 
   void encode(bufferlist& bl, uint64_t features) const {
-    ::encode(name, bl);
-    ::encode(addr, bl, features);
+    using ceph::encode;
+    encode(name, bl);
+    encode(addr, bl, features);
   }
   void decode(bufferlist::iterator& bl) {
-    ::decode(name, bl);
-    ::decode(addr, bl);
+    using ceph::decode;
+    decode(name, bl);
+    decode(addr, bl);
   }
 
   void dump(Formatter *f) const;

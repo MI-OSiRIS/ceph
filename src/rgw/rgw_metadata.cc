@@ -45,19 +45,19 @@ void LogStatusDump::dump(Formatter *f) const {
 
 void RGWMetadataLogData::encode(bufferlist& bl) const {
   ENCODE_START(1, 1, bl);
-  ::encode(read_version, bl);
-  ::encode(write_version, bl);
+  encode(read_version, bl);
+  encode(write_version, bl);
   uint32_t s = (uint32_t)status;
-  ::encode(s, bl);
+  encode(s, bl);
   ENCODE_FINISH(bl);
 }
 
 void RGWMetadataLogData::decode(bufferlist::iterator& bl) {
    DECODE_START(1, bl);
-   ::decode(read_version, bl);
-   ::decode(write_version, bl);
+   decode(read_version, bl);
+   decode(write_version, bl);
    uint32_t s;
-   ::decode(s, bl);
+   decode(s, bl);
    status = (RGWMDLogStatus)s;
    DECODE_FINISH(bl);
 }
@@ -273,8 +273,8 @@ obj_version& RGWMetadataObject::get_version()
 
 class RGWMetadataTopHandler : public RGWMetadataHandler {
   struct iter_data {
-    list<string> sections;
-    list<string>::iterator iter;
+    set<string> sections;
+    set<string>::iterator iter;
   };
 
 public:
@@ -290,10 +290,14 @@ public:
 
   int remove(RGWRados *store, string& entry, RGWObjVersionTracker& objv_tracker) override { return -ENOTSUP; }
 
-  int list_keys_init(RGWRados *store, void **phandle) override {
+  int list_keys_init(RGWRados *store, const string& marker, void **phandle) override {
     iter_data *data = new iter_data;
-    store->meta_mgr->get_sections(data->sections);
-    data->iter = data->sections.begin();
+    list<string> sections;
+    store->meta_mgr->get_sections(sections);
+    for (auto& s : sections) {
+      data->sections.insert(s);
+    }
+    data->iter = data->sections.lower_bound(marker);
 
     *phandle = data;
 
@@ -313,6 +317,16 @@ public:
     iter_data *data = static_cast<iter_data *>(handle);
 
     delete data;
+  }
+
+  virtual string get_marker(void *handle) {
+    iter_data *data = static_cast<iter_data *>(handle);
+
+    if (data->iter != data->sections.end()) {
+      return *(data->iter);
+    }
+
+    return string();
   }
 };
 
@@ -369,7 +383,7 @@ int write_history(RGWRados *store, const RGWMetadataLogHistory& state,
 
   auto& pool = store->get_zone_params().log_pool;
   const auto& oid = RGWMetadataLogHistory::oid;
-  return rgw_put_system_obj(store, pool, oid, bl.c_str(), bl.length(),
+  return rgw_put_system_obj(store, pool, oid, bl,
                             exclusive, objv_tracker, real_time{});
 }
 
@@ -830,8 +844,13 @@ struct list_keys_handle {
   RGWMetadataHandler *handler;
 };
 
+int RGWMetadataManager::list_keys_init(const string& section, void **handle)
+{
+  return list_keys_init(section, string(), handle);
+}
 
-int RGWMetadataManager::list_keys_init(string& section, void **handle)
+int RGWMetadataManager::list_keys_init(const string& section,
+                                       const string& marker, void **handle)
 {
   string entry;
   RGWMetadataHandler *handler;
@@ -845,7 +864,7 @@ int RGWMetadataManager::list_keys_init(string& section, void **handle)
 
   list_keys_handle *h = new list_keys_handle;
   h->handler = handler;
-  ret = handler->list_keys_init(store, &h->handle);
+  ret = handler->list_keys_init(store, marker, &h->handle);
   if (ret < 0) {
     delete h;
     return ret;
@@ -865,7 +884,6 @@ int RGWMetadataManager::list_keys_next(void *handle, int max, list<string>& keys
   return handler->list_keys_next(h->handle, max, keys, truncated);
 }
 
-
 void RGWMetadataManager::list_keys_complete(void *handle)
 {
   list_keys_handle *h = static_cast<list_keys_handle *>(handle);
@@ -874,6 +892,13 @@ void RGWMetadataManager::list_keys_complete(void *handle)
 
   handler->list_keys_complete(h->handle);
   delete h;
+}
+
+string RGWMetadataManager::get_marker(void *handle)
+{
+  list_keys_handle *h = static_cast<list_keys_handle *>(handle);
+
+  return h->handler->get_marker(h->handle);
 }
 
 void RGWMetadataManager::dump_log_entry(cls_log_entry& entry, Formatter *f)
@@ -887,7 +912,7 @@ void RGWMetadataManager::dump_log_entry(cls_log_entry& entry, Formatter *f)
   try {
     RGWMetadataLogData log_data;
     bufferlist::iterator iter = entry.data.begin();
-    ::decode(log_data, iter);
+    decode(log_data, iter);
 
     encode_json("data", log_data, f);
   } catch (buffer::error& err) {
@@ -924,7 +949,7 @@ int RGWMetadataManager::pre_modify(RGWMetadataHandler *handler, string& section,
   log_data.status = op_type;
 
   bufferlist logbl;
-  ::encode(log_data, logbl);
+  encode(log_data, logbl);
 
   assert(current_log); // must have called init()
   int ret = current_log->add_entry(handler, section, key, logbl);
@@ -943,7 +968,7 @@ int RGWMetadataManager::post_modify(RGWMetadataHandler *handler, const string& s
     log_data.status = MDLOG_STATUS_ABORT;
 
   bufferlist logbl;
-  ::encode(log_data, logbl);
+  encode(log_data, logbl);
 
   assert(current_log); // must have called init()
   int r = current_log->add_entry(handler, section, key, logbl);
@@ -981,10 +1006,9 @@ int RGWMetadataManager::store_in_heap(RGWMetadataHandler *handler, const string&
   otracker.write_version = objv_tracker->write_version;
   string oid = heap_oid(handler, key, objv_tracker->write_version);
   int ret = rgw_put_system_obj(store, heap_pool, oid,
-                               bl.c_str(), bl.length(), false,
-                               &otracker, mtime, pattrs);
+                               bl, false, &otracker, mtime, pattrs);
   if (ret < 0) {
-    ldout(store->ctx(), 0) << "ERROR: rgw_put_system_obj() oid=" << oid << ") returned ret=" << ret << dendl;
+    ldout(store->ctx(), 0) << "ERROR: rgw_put_system_obj() oid=" << oid << " returned ret=" << ret << dendl;
     return ret;
   }
 
@@ -1007,7 +1031,7 @@ int RGWMetadataManager::remove_from_heap(RGWMetadataHandler *handler, const stri
   rgw_raw_obj obj(heap_pool, oid);
   int ret = store->delete_system_obj(obj);
   if (ret < 0) {
-    ldout(store->ctx(), 0) << "ERROR: store->delete_system_obj()=" << oid << ") returned ret=" << ret << dendl;
+    ldout(store->ctx(), 0) << "ERROR: store->delete_system_obj() oid=" << oid << " returned ret=" << ret << dendl;
     return ret;
   }
 
@@ -1034,8 +1058,7 @@ int RGWMetadataManager::put_entry(RGWMetadataHandler *handler, const string& key
     goto done;
   }
 
-  ret = rgw_put_system_obj(store, pool, oid,
-                           bl.c_str(), bl.length(), exclusive,
+  ret = rgw_put_system_obj(store, pool, oid, bl, exclusive,
                            objv_tracker, mtime, pattrs);
 
   if (ret < 0) {

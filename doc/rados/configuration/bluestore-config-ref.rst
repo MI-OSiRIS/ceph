@@ -14,7 +14,7 @@ device.  The storage device is normally partitioned into two parts:
 #. A small partition is formatted with XFS and contains basic metadata
    for the OSD.  This *data directory* includes information about the
    OSD (its identifier, which cluster it belongs to, and its private
-   keyring.
+   keyring).
 
 #. The rest of the device is normally a large partition occupying the
    rest of the device that is managed directly by BlueStore contains
@@ -45,11 +45,14 @@ it will fix).
 
 A single-device BlueStore OSD can be provisioned with::
 
-  ceph-disk prepare --bluestore <device>
+  ceph-volume lvm prepare --bluestore --data <device>
 
 To specify a WAL device and/or DB device, ::
 
-  ceph-disk prepare --bluestore <device> --block.wal <wal-device> --block-db <db-device>
+  ceph-volume lvm prepare --bluestore --data <device> --block.wal <wal-device> --block.db <db-device>
+
+.. note:: --data can be a Logical Volume using the vg/lv notation. Other
+          devices can be existing logical volumes or GPT partitions
 
 Cache size
 ==========
@@ -85,21 +88,21 @@ certain point.
 ``bluestore_cache_size``
 
 :Description: The amount of memory BlueStore will use for its cache.  If zero, ``bluestore_cache_size_hdd`` or ``bluestore_cache_size_ssd`` will be used instead.
-:Type: Integer
+:Type: Unsigned Integer
 :Required: Yes
 :Default: ``0``
 
 ``bluestore_cache_size_hdd``
 
 :Description: The default amount of memory BlueStore will use for its cache when backed by an HDD.
-:Type: Integer
+:Type: Unsigned Integer
 :Required: Yes
 :Default: ``1 * 1024 * 1024 * 1024`` (1 GB)
 
 ``bluestore_cache_size_ssd``
 
 :Description: The default amount of memory BlueStore will use for its cache when backed by an SSD.
-:Type: Integer
+:Type: Unsigned Integer
 :Required: Yes
 :Default: ``3 * 1024 * 1024 * 1024`` (3 GB)
 
@@ -120,7 +123,7 @@ certain point.
 ``bluestore_cache_kv_max``
 
 :Description: The maximum amount of cache devoted to key/value data (rocksdb).
-:Type: Floating point
+:Type: Unsigned Integer
 :Required: Yes
 :Default: ``512 * 1024*1024`` (512 MB)
 
@@ -143,8 +146,8 @@ value (usually 4 bytes) for every 4 kilobyte block of data.
 It is possible to use a smaller checksum value by truncating the
 checksum to two or one byte, reducing the metadata overhead.  The
 trade-off is that the probability that a random error will not be
-detected is higher with a smaller checksum, going from about one if
-four billion with a 32-bit (4 byte) checksum to one is 65,536 for a
+detected is higher with a smaller checksum, going from about one in
+four billion with a 32-bit (4 byte) checksum to one in 65,536 for a
 16-bit (2 byte) checksum or one in 256 for an 8-bit (1 byte) checksum.
 The smaller checksum values can be used by selecting `crc32c_16` or
 `crc32c_8` as the checksum algorithm.
@@ -182,7 +185,7 @@ operation.  The modes are:
 * **force**: Try to compress data no matter what.
 
 For more information about the *compressible* and *incompressible* IO
-hints, see :doc:`/api/librados/#rados_set_alloc_hint`.
+hints, see :c:func:`rados_set_alloc_hint`.
 
 Note that regardless of the mode, if the size of the data chunk is not
 reduced sufficiently it will not be used and the original
@@ -216,11 +219,12 @@ set with::
 
 :Description: The default policy for using compression if the per-pool property
               ``compression_mode`` is not set. ``none`` means never use
-              compression.  ``passive`` means use compression when
-              `clients hint`_ that data is compressible.  ``aggressive`` means
-              use compression unless clients hint that data is not compressible.
-              ``force`` means use compression under all circumstances even if
-              the clients hint that the data is not compressible.
+              compression. ``passive`` means use compression when
+              :c:func:`clients hint <rados_set_alloc_hint>` that data is
+              compressible.  ``aggressive`` means use compression unless
+              clients hint that data is not compressible.  ``force`` means use
+              compression under all circumstances even if the clients hint that
+              the data is not compressible.
 :Type: String
 :Required: No
 :Valid Settings: ``none``, ``passive``, ``aggressive``, ``force``
@@ -294,4 +298,32 @@ set with::
 :Required: No
 :Default: 64K
 
-.. _clients hint: ../../api/librados/#rados_set_alloc_hint
+SPDK Usage
+==================
+
+If you want to use SPDK driver for NVME SSD, you need to specify NVMe serial
+number here with "spdk:" prefix for ``bluestore_block_path``.
+
+For example, users can find the serial number with::
+
+  $ lspci -vvv -d 8086:0953 | grep "Device Serial Number"
+
+and then set::
+
+  bluestore block path = spdk:...
+
+If you want to run multiple SPDK instances per node, you must specify the
+amount of dpdk memory size in MB each instance will use, to make sure each
+instance uses its own dpdk memory
+
+In most cases, we only need one device to serve as data, db, db wal purposes.
+We need to make sure configurations below to make sure all IOs issued under
+SPDK.::
+
+  bluestore_block_db_path = ""
+  bluestore_block_db_size = 0
+  bluestore_block_wal_path = ""
+  bluestore_block_wal_size = 0
+
+Otherwise, the current implementation will setup symbol file to kernel
+filesystem location and uses kernel driver to issue DB/WAL IO.

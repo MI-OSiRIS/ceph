@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -x
 
 die() {
     echo "$@"
@@ -248,7 +250,9 @@ run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 1 write --format json --outpu
 run_expect_fail "$RADOS_TOOL" --pool "$POOL" bench 1 write --output "$TDIR/bench.json"
 run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 5 write --format json --no-cleanup
 run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 1 rand --format json
+run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 1 rand -f json
 run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 1 seq --format json
+run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 1 seq -f json
 run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 5 write --write-omap
 run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 5 write --write-object
 run_expect_succ "$RADOS_TOOL" --pool "$POOL" bench 5 write --write-xattr
@@ -302,6 +306,8 @@ test_omap() {
         $RADOS_TOOL -p $POOL rmomapkey $OBJ $i
     done
     $RADOS_TOOL -p $POOL listomapvals $OBJ | grep -c value | grep 5
+    $RADOS_TOOL -p $POOL clearomap $OBJ
+    $RADOS_TOOL -p $POOL listomapvals $OBJ | wc -l | grep 0
     cleanup
 
     for i in $(seq 1 1 10)
@@ -346,7 +352,7 @@ test_rmobj() {
     $CEPH_TOOL osd pool set-quota $p max_objects 1
     V1=`mktemp fooattrXXXXXXX`
     $RADOS_TOOL put $OBJ $V1 -p $p
-    while ! $CEPH_TOOL osd dump | grep 'full max_objects'
+    while ! $CEPH_TOOL osd dump | grep 'full_quota max_objects'
     do
 	sleep 2
     done

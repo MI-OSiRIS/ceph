@@ -10,22 +10,30 @@
 :Type: Boolean
 :Default: ``true`` 
 
+``mds cache memory limit``
 
-``mds max file size``
-
-:Description: The maximum allowed file size to set when creating a 
-              new file system.
-
+:Description: The memory limit the MDS should enforce for its cache.
+              Administrators should use this instead of ``mds cache size``.
 :Type:  64-bit Integer Unsigned
-:Default:  ``1ULL << 40``
+:Default: ``1073741824``
 
+``mds cache reservation``
+
+:Description: The cache reservation (memory or inodes) for the MDS cache to maintain.
+              Once the MDS begins dipping into its reservation, it will recall
+              client state until its cache size shrinks to restore the
+              reservation.
+:Type:  Float
+:Default: ``0.05``
 
 ``mds cache size``
 
-:Description: The number of inodes to cache.
+:Description: The number of inodes to cache. A value of 0 indicates an
+              unlimited number. It is recommended to use
+              ``mds_cache_memory_limit`` to limit the amount of memory the MDS
+              cache uses.
 :Type:  32-bit Integer
-:Default: ``100000``
-
+:Default: ``0``
 
 ``mds cache mid``
 
@@ -80,27 +88,14 @@
 
 ``mds blacklist interval``
 
-:Description: The blacklist duration for failed MDSs in the OSD map.
+:Description: The blacklist duration for failed MDSs in the OSD map. Note,
+              this controls how long failed MDS daemons will stay in the
+              OSDMap blacklist. It has no effect on how long something is
+              blacklisted when the administrator blacklists it manually. For
+              example, ``ceph osd blacklist add`` will still use the default
+              blacklist time.
 :Type:  Float
 :Default: ``24.0*60.0``
-
-
-``mds session timeout``
-
-:Description: The interval (in seconds) of client inactivity before Ceph 
-              times out capabilities and leases.
-              
-:Type:  Float
-:Default: ``60``
-
-
-``mds session autoclose``
-
-:Description: The interval (in seconds) before Ceph closes 
-              a laggy client's session.
-              
-:Type:  Float
-:Default: ``300``
 
 
 ``mds reconnect timeout``
@@ -230,13 +225,6 @@
               
 :Type:  Float
 :Default: ``0``
-
-
-``mds bal frag``
-
-:Description: Determines whether the MDS will fragment directories.
-:Type:  Boolean
-:Default:  ``false``
 
 
 ``mds bal split size``
@@ -552,7 +540,7 @@
               (for testing only).
               
 :Type:  Boolean
-:Default: ``0``
+:Default: ``false``
 
 
 ``mds wipe ino prealloc``
@@ -561,7 +549,7 @@
               (for testing only).
               
 :Type:  Boolean
-:Default: ``0``
+:Default: ``false``
 
 
 ``mds skip ino``
@@ -596,3 +584,17 @@
               
 :Type:  Boolean
 :Default:  ``false``
+
+
+``mds min caps per client``
+
+:Description: Set the minimum number of capabilities a client may hold.
+:Type: Integer
+:Default: ``100``
+
+
+``mds max ratio caps per client``
+
+:Description: Set the maximum ratio of current caps that may be recalled during MDS cache pressure.
+:Type: Float
+:Default: ``0.8``

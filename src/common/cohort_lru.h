@@ -32,6 +32,7 @@ namespace cohort {
     /* public flag values */
     constexpr uint32_t FLAG_NONE = 0x0000;
     constexpr uint32_t FLAG_INITIAL = 0x0001;
+    constexpr uint32_t FLAG_RECYCLE = 0x0002;
 
     enum class Edge : std::uint8_t
     {
@@ -136,6 +137,7 @@ namespace cohort {
 	for (int ix = 0; ix < n_lanes; ++ix,
 	       lane_ix = next_evict_lane()) {
 	  Lane& lane = qlane[lane_ix];
+	  lane.lock.lock();
 	  /* if object at LRU has refcnt==1, it may be reclaimable */
 	  Object* o = &(lane.q.back());
 	  if (can_reclaim(o)) {
@@ -156,7 +158,6 @@ namespace cohort {
 	      return o;
 	    } else {
 	      // XXX can't make unreachable (means what?)
-	      lane.lock.lock();
 	      --(o->lru_refcnt);
 	      o->lru_flags &= ~FLAG_EVICTING;
 	      /* unlock in next block */
@@ -232,12 +233,14 @@ namespace cohort {
 	  delete tdo;
       } /* unref */
 
-      Object* insert(ObjectFactory* fac, Edge edge, uint32_t flags) {
+      Object* insert(ObjectFactory* fac, Edge edge, uint32_t& flags) {
 	/* use supplied functor to re-use an evicted object, or
 	 * allocate a new one of the descendant type */
 	Object* o = evict_block();
-	if (o)
+	if (o) {
 	  fac->recycle(o); /* recycle existing object */
+	  flags |= FLAG_RECYCLE;
+	}
 	else
 	  o = fac->alloc(); /* get a new one */
 
@@ -305,7 +308,7 @@ namespace cohort {
       struct Latch {
 	Partition* p;
 	LK* lock;
-	insert_commit_data commit_data;
+	insert_commit_data commit_data{};
 
 	Latch() : p(nullptr), lock(nullptr) {}
       };

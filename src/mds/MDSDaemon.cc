@@ -21,7 +21,6 @@
 #include "common/Clock.h"
 #include "common/HeartbeatMap.h"
 #include "common/Timer.h"
-#include "common/backport14.h"
 #include "common/ceph_argparse.h"
 #include "common/config.h"
 #include "common/entity_name.h"
@@ -69,20 +68,8 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "mds." << name << ' '
 
-
-class MDSDaemon::C_MDS_Tick : public Context {
-  protected:
-    MDSDaemon *mds_daemon;
-public:
-  explicit C_MDS_Tick(MDSDaemon *m) : mds_daemon(m) {}
-  void finish(int r) override {
-    assert(mds_daemon->mds_lock.is_locked_by_me());
-    mds_daemon->tick();
-  }
-};
-
 // cons/des
-MDSDaemon::MDSDaemon(const std::string &n, Messenger *m, MonClient *mc) :
+MDSDaemon::MDSDaemon(std::string_view n, Messenger *m, MonClient *mc) :
   Dispatcher(m->cct),
   mds_lock("MDSDaemon::mds_lock"),
   stopping(false),
@@ -102,7 +89,6 @@ MDSDaemon::MDSDaemon(const std::string &n, Messenger *m, MonClient *mc) :
   mgrc(m->cct, m),
   log_client(m->cct, messenger, &mc->monmap, LogClient::NO_FLAGS),
   mds_rank(NULL),
-  tick_event(0),
   asok_hook(NULL)
 {
   orig_argc = 0;
@@ -255,12 +241,22 @@ void MDSDaemon::set_up_admin_socket()
                                      asok_hook,
                                      "dump metadata cache (optionally to a file)");
   assert(r == 0);
+  r = admin_socket->register_command("cache status",
+                                     "cache status",
+                                     asok_hook,
+                                     "show cache status");
+  assert(r == 0);
   r = admin_socket->register_command("dump tree",
 				     "dump tree "
 				     "name=root,type=CephString,req=true "
 				     "name=depth,type=CephInt,req=false ",
 				     asok_hook,
 				     "dump metadata cache for subtree");
+  assert(r == 0);
+  r = admin_socket->register_command("dump loads",
+                                     "dump loads",
+                                     asok_hook,
+                                     "dump metadata loads");
   assert(r == 0);
   r = admin_socket->register_command("session evict",
 				     "session evict name=client_id,type=CephString",
@@ -313,6 +309,11 @@ void MDSDaemon::set_up_admin_socket()
 				     asok_hook,
 				     "List fragments in directory");
   assert(r == 0);
+  r = admin_socket->register_command("openfiles ls",
+                                     "openfiles ls",
+                                     asok_hook,
+                                     "List the opening files and their caps");
+  assert(r == 0);
 }
 
 void MDSDaemon::clean_up_admin_socket()
@@ -329,7 +330,9 @@ void MDSDaemon::clean_up_admin_socket()
   admin_socket->unregister_command("flush_path");
   admin_socket->unregister_command("export dir");
   admin_socket->unregister_command("dump cache");
+  admin_socket->unregister_command("cache status");
   admin_socket->unregister_command("dump tree");
+  admin_socket->unregister_command("dump loads");
   admin_socket->unregister_command("session evict");
   admin_socket->unregister_command("osdmap barrier");
   admin_socket->unregister_command("session ls");
@@ -339,6 +342,7 @@ void MDSDaemon::clean_up_admin_socket()
   admin_socket->unregister_command("dirfrag split");
   admin_socket->unregister_command("dirfrag merge");
   admin_socket->unregister_command("dirfrag ls");
+  admin_socket->unregister_command("openfiles ls");
   delete asok_hook;
   asok_hook = NULL;
 }
@@ -433,7 +437,8 @@ int MDSDaemon::init()
   dout(10) << sizeof(MDSCacheObject) << "\tMDSCacheObject" << dendl;
   dout(10) << sizeof(CInode) << "\tCInode" << dendl;
   dout(10) << sizeof(elist<void*>::item) << "\t elist<>::item   *7=" << 7*sizeof(elist<void*>::item) << dendl;
-  dout(10) << sizeof(inode_t) << "\t inode_t " << dendl;
+  dout(10) << sizeof(CInode::mempool_inode) << "\t inode  " << dendl;
+  dout(10) << sizeof(CInode::mempool_old_inode) << "\t old_inode " << dendl;
   dout(10) << sizeof(nest_info_t) << "\t  nest_info_t " << dendl;
   dout(10) << sizeof(frag_info_t) << "\t  frag_info_t " << dendl;
   dout(10) << sizeof(SimpleLock) << "\t SimpleLock   *5=" << 5*sizeof(SimpleLock) << dendl;
@@ -452,7 +457,7 @@ int MDSDaemon::init()
   messenger->add_dispatcher_tail(&beacon);
   messenger->add_dispatcher_tail(this);
 
-  // get monmap
+  // init monc
   monc->set_messenger(messenger);
 
   monc->set_want_keys(CEPH_ENTITY_TYPE_MON | CEPH_ENTITY_TYPE_OSD |
@@ -460,7 +465,7 @@ int MDSDaemon::init()
   int r = 0;
   r = monc->init();
   if (r < 0) {
-    derr << "ERROR: failed to get monmap: " << cpp_strerror(-r) << dendl;
+    derr << "ERROR: failed to init monc: " << cpp_strerror(-r) << dendl;
     mds_lock.Lock();
     suicide();
     mds_lock.Unlock();
@@ -539,8 +544,12 @@ void MDSDaemon::reset_tick()
   if (tick_event) timer.cancel_event(tick_event);
 
   // schedule
-  tick_event = new C_MDS_Tick(this);
-  timer.add_event_after(g_conf->mds_tick_interval, tick_event);
+  tick_event = timer.add_event_after(
+    g_conf->mds_tick_interval,
+    new FunctionContext([this](int) {
+	assert(mds_lock.is_locked_by_me());
+	tick();
+      }));
 }
 
 void MDSDaemon::tick()
@@ -556,24 +565,25 @@ void MDSDaemon::tick()
 
 void MDSDaemon::send_command_reply(MCommand *m, MDSRank *mds_rank,
 				   int r, bufferlist outbl,
-				   const std::string& outs)
+				   std::string_view outs)
 {
   Session *session = static_cast<Session *>(m->get_connection()->get_priv());
   assert(session != NULL);
   // If someone is using a closed session for sending commands (e.g.
   // the ceph CLI) then we should feel free to clean up this connection
   // as soon as we've sent them a response.
-  const bool live_session = mds_rank &&
-    mds_rank->sessionmap.get_session(session->info.inst.name) != nullptr
-    && session->get_state_seq() > 0;
+  const bool live_session =
+    session->get_state_seq() > 0 &&
+    mds_rank &&
+    mds_rank->sessionmap.get_session(session->info.inst.name);
 
   if (!live_session) {
     // This session only existed to issue commands, so terminate it
     // as soon as we can.
     assert(session->is_closed());
     session->connection->mark_disposable();
-    session->put();
   }
+  session->put();
 
   MCommandReply *reply = new MCommandReply(r, outs);
   reply->set_tid(m->get_tid());
@@ -612,6 +622,7 @@ void MDSDaemon::handle_command(MCommand *m)
   } else {
     r = _handle_command(cmdmap, m, &outbl, &outs, &run_after, &need_reply);
   }
+  session->put();
 
   if (need_reply) {
     send_command_reply(m, mds_rank, r, outbl, outs);
@@ -735,7 +746,7 @@ int MDSDaemon::_handle_command(
 
   if (prefix == "get_command_descriptions") {
     int cmdnum = 0;
-    std::unique_ptr<JSONFormatter> f(ceph::make_unique<JSONFormatter>());
+    std::unique_ptr<JSONFormatter> f(std::make_unique<JSONFormatter>());
     f->open_object_section("command_descriptions");
     for (MDSCommand *cp = mds_commands;
 	 cp < &mds_commands[ARRAY_SIZE(mds_commands)]; cp++) {
@@ -826,18 +837,19 @@ int MDSDaemon::_handle_command(
     cpu_profiler_handle_command(argvec, ds);
   } else {
     // Give MDSRank a shot at the command
-    if (mds_rank) {
+    if (!mds_rank) {
+      ss << "MDS not active";
+      r = -EINVAL;
+    }
+    else {
       bool handled = mds_rank->handle_command(cmdmap, m, &r, &ds, &ss,
 					      need_reply);
-      if (handled) {
-        goto out;
+      if (!handled) {
+        // MDSDaemon doesn't know this command
+        ss << "unrecognized command! " << prefix;
+        r = -EINVAL;
       }
     }
-
-    // Neither MDSDaemon nor MDSRank know this command
-    std::ostringstream ss;
-    ss << "unrecognized command! " << prefix;
-    r = -EINVAL;
   }
 
 out:
@@ -1074,7 +1086,14 @@ void MDSDaemon::respawn()
    * unlinked.
    */
   char exe_path[PATH_MAX] = "";
-  if (readlink(PROCPREFIX "/proc/self/exe", exe_path, PATH_MAX-1) == -1) {
+#ifdef PROCPREFIX
+  if (readlink(PROCPREFIX "/proc/self/exe", exe_path, PATH_MAX-1) != -1) {
+    dout(1) << "respawning with exe " << exe_path << dendl;
+    strcpy(exe_path, PROCPREFIX "/proc/self/exe");
+  } else {
+#else
+  {
+#endif
     /* Print CWD for the user's interest */
     char buf[PATH_MAX];
     char *cwd = getcwd(buf, sizeof(buf));
@@ -1083,9 +1102,6 @@ void MDSDaemon::respawn()
 
     /* Fall back to a best-effort: just running in our CWD */
     strncpy(exe_path, orig_argv[0], PATH_MAX-1);
-  } else {
-    dout(1) << "respawning with exe " << exe_path << dendl;
-    strcpy(exe_path, PROCPREFIX "/proc/self/exe");
   }
 
   dout(1) << " exe_path " << exe_path << dendl;
@@ -1343,26 +1359,28 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
     if (caps_info.allow_all) {
       // Flag for auth providers that don't provide cap strings
       s->auth_caps.set_allow_all();
-    }
+    } else {
+      bufferlist::iterator p = caps_info.caps.begin();
+      string auth_cap_str;
+      try {
+        decode(auth_cap_str, p);
 
-    bufferlist::iterator p = caps_info.caps.begin();
-    string auth_cap_str;
-    try {
-      ::decode(auth_cap_str, p);
-
-      dout(10) << __func__ << ": parsing auth_cap_str='" << auth_cap_str << "'" << dendl;
-      std::ostringstream errstr;
-      if (!s->auth_caps.parse(g_ceph_context, auth_cap_str, &errstr)) {
-        dout(1) << __func__ << ": auth cap parse error: " << errstr.str()
-		<< " parsing '" << auth_cap_str << "'" << dendl;
-	clog->warn() << name << " mds cap '" << auth_cap_str
-		     << "' does not parse: " << errstr.str();
+        dout(10) << __func__ << ": parsing auth_cap_str='" << auth_cap_str << "'" << dendl;
+        std::ostringstream errstr;
+        if (!s->auth_caps.parse(g_ceph_context, auth_cap_str, &errstr)) {
+          dout(1) << __func__ << ": auth cap parse error: " << errstr.str()
+		  << " parsing '" << auth_cap_str << "'" << dendl;
+	  clog->warn() << name << " mds cap '" << auth_cap_str
+		       << "' does not parse: " << errstr.str();
+          is_valid = false;
+        }
+      } catch (buffer::error& e) {
+        // Assume legacy auth, defaults to:
+        //  * permit all filesystem ops
+        //  * permit no `tell` ops
+        dout(1) << __func__ << ": cannot decode auth caps bl of length " << caps_info.caps.length() << dendl;
+        is_valid = false;
       }
-    } catch (buffer::error& e) {
-      // Assume legacy auth, defaults to:
-      //  * permit all filesystem ops
-      //  * permit no `tell` ops
-      dout(1) << __func__ << ": cannot decode auth caps bl of length " << caps_info.caps.length() << dendl;
     }
   }
 

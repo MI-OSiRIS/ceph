@@ -77,7 +77,9 @@ public:
     if (iter == modules.end()) {
       return false;
     }
-    *module = iter->second;
+    if (module != nullptr) {
+      *module = iter->second;
+    }
     return true;
   }
 
@@ -99,6 +101,16 @@ public:
 
     return module.get()->create_instance(cct, config, instance);
   }
+
+  vector<string> get_registered_module_names() const {
+    vector<string> names;
+    for (auto& i: modules) {
+      if (!i.first.empty()) {
+        names.push_back(i.first);
+      }
+    }
+    return names;
+  }
 };
 
 class RGWStatRemoteObjCBCR : public RGWCoroutine {
@@ -109,7 +121,7 @@ protected:
   rgw_obj_key key;
 
   ceph::real_time mtime;
-  uint64_t size;
+  uint64_t size = 0;
   map<string, bufferlist> attrs;
 public:
   RGWStatRemoteObjCBCR(RGWDataSyncEnv *_sync_env,

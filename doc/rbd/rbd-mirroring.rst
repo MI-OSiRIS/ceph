@@ -102,6 +102,18 @@ For example::
         rbd --cluster local mirror pool peer remove image-pool 55672766-c02b-4729-8567-f13a66893445
         rbd --cluster remote mirror pool peer remove image-pool 60c0e299-b38f-4234-91f6-eed0a367be08
 
+Data Pools
+----------
+
+When creating images in the destination cluster, ``rbd-mirror`` selects a data
+pool as follows:
+
+#. If the destination cluster has a default data pool configured (with the
+   ``rbd_default_data_pool`` configuration option), it will be used.
+#. Otherwise, if the source image uses a separate data pool, and a pool with the
+   same name exists on the destination cluster, that pool will be used.
+#. If neither of the above is true, no data pool will be set.
+
 Image Configuration
 ===================
 
@@ -301,6 +313,10 @@ The ``rbd-mirror`` daemon can be managed by ``systemd`` by specifying the user
 ID as the daemon instance::
 
   systemctl enable ceph-rbd-mirror@rbd-mirror.{unique id}
+
+The ``rbd-mirror`` can also be run in foreground by ``rbd-mirror`` command::
+
+  rbd-mirror -f --log-file={log_path}
 
 .. _rbd: ../../man/8/rbd
 .. _ceph-conf: ../../rados/configuration/ceph-conf/#running-multiple-clusters

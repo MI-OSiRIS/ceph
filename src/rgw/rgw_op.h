@@ -28,7 +28,6 @@
 #include "common/mime.h"
 #include "common/utf8.h"
 #include "common/ceph_json.h"
-#include "common/utf8.h"
 #include "common/ceph_time.h"
 
 #include "rgw_common.h"
@@ -42,6 +41,8 @@
 #include "rgw_lc.h"
 #include "rgw_torrent.h"
 #include "rgw_tag.h"
+#include "cls/lock/cls_lock_client.h"
+#include "cls/rgw/cls_rgw_client.h"
 
 #include "include/assert.h"
 
@@ -118,6 +119,7 @@ protected:
   int do_aws4_auth_completion();
 
   virtual int init_quota();
+
 public:
   RGWOp()
     : s(nullptr),
@@ -203,6 +205,7 @@ protected:
   bool partial_content;
   bool range_parsed;
   bool skip_manifest;
+  bool skip_decrypt{false};
   rgw_obj obj;
   utime_t gc_invalidate_time;
   bool is_slo;
@@ -581,40 +584,51 @@ public:
 }; /* RGWBulkUploadOp::AlignedStreamGetter */
 
 
+struct RGWUsageStats {
+  uint64_t bytes_used = 0;
+  uint64_t bytes_used_rounded = 0;
+  uint64_t buckets_count = 0;
+  uint64_t objects_count = 0;
+};
+
 #define RGW_LIST_BUCKETS_LIMIT_MAX 10000
 
 class RGWListBuckets : public RGWOp {
 protected:
   bool sent_data;
-  string marker;
-  string end_marker;
+  std::string marker;
+  std::string end_marker;
   int64_t limit;
   uint64_t limit_max;
-  uint32_t buckets_count;
-  uint64_t buckets_objcount;
-  uint64_t buckets_size;
-  uint64_t buckets_size_rounded;
-  map<string, bufferlist> attrs;
+  std::map<std::string, ceph::bufferlist> attrs;
   bool is_truncated;
+
+  RGWUsageStats global_stats;
+  std::map<std::string, RGWUsageStats> policies_stats;
 
   virtual uint64_t get_default_max() const {
     return 1000;
   }
 
 public:
-  RGWListBuckets() : sent_data(false) {
-    limit = limit_max = RGW_LIST_BUCKETS_LIMIT_MAX;
-    buckets_count = 0;
-    buckets_objcount = 0;
-    buckets_size = 0;
-    buckets_size_rounded = 0;
-    is_truncated = false;
+  RGWListBuckets()
+    : sent_data(false),
+      limit(RGW_LIST_BUCKETS_LIMIT_MAX),
+      limit_max(RGW_LIST_BUCKETS_LIMIT_MAX),
+      is_truncated(false) {
   }
 
   int verify_permission() override;
   void execute() override;
 
   virtual int get_params() = 0;
+  virtual void handle_listing_chunk(RGWUserBuckets&& buckets) {
+    /* The default implementation, used by e.g. S3, just generates a new
+     * part of listing and sends it client immediately. Swift can behave
+     * differently: when the reverse option is requested, all incoming
+     * instances of RGWUserBuckets are buffered and finally reversed. */
+    return send_response_data(buckets);
+  }
   virtual void send_response_begin(bool has_buckets) = 0;
   virtual void send_response_data(RGWUserBuckets& buckets) = 0;
   virtual void send_response_end() = 0;
@@ -658,24 +672,17 @@ public:
 
 class RGWStatAccount : public RGWOp {
 protected:
-  uint32_t buckets_count;
-  uint64_t buckets_objcount;
-  uint64_t buckets_size;
-  uint64_t buckets_size_rounded;
+  RGWUsageStats global_stats;
+  std::map<std::string, RGWUsageStats> policies_stats;
 
 public:
-  RGWStatAccount() {
-    buckets_count = 0;
-    buckets_objcount = 0;
-    buckets_size = 0;
-    buckets_size_rounded = 0;
-  }
+  RGWStatAccount() = default;
 
   int verify_permission() override;
   void execute() override;
 
   void send_response() override = 0;
-  const string name() override { return "stat_account"; }
+  const std::string name() override { return "stat_account"; }
   RGWOpType get_type() override { return RGW_OP_STAT_ACCOUNT; }
   uint32_t op_mask() override { return RGW_OP_TYPE_READ; }
 };
@@ -738,6 +745,7 @@ public:
 
   void send_response() override = 0;
   const string name() override { return "get_bucket_location"; }
+  RGWOpType get_type() override { return RGW_OP_GET_BUCKET_LOCATION; }
   uint32_t op_mask() override { return RGW_OP_TYPE_READ; }
 };
 
@@ -758,12 +766,18 @@ public:
   uint32_t op_mask() override { return RGW_OP_TYPE_READ; }
 };
 
+enum BucketVersionStatus {
+  VersioningNotChanged = 0,
+  VersioningEnabled = 1,
+  VersioningSuspended =2,
+};
+
 class RGWSetBucketVersioning : public RGWOp {
 protected:
-  bool enable_versioning;
+  int versioning_status;
   bufferlist in_data;
 public:
-  RGWSetBucketVersioning() : enable_versioning(false) {}
+  RGWSetBucketVersioning() : versioning_status(VersioningNotChanged) {}
 
   int verify_permission() override;
   void pre_exec() override;
@@ -906,17 +920,17 @@ struct rgw_slo_entry {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(path, bl);
-    ::encode(etag, bl);
-    ::encode(size_bytes, bl);
+    encode(path, bl);
+    encode(etag, bl);
+    encode(size_bytes, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator& bl) {
      DECODE_START(1, bl);
-     ::decode(path, bl);
-     ::decode(etag, bl);
-     ::decode(size_bytes, bl);
+     decode(path, bl);
+     decode(etag, bl);
+     decode(size_bytes, bl);
      DECODE_FINISH(bl);
   }
 
@@ -939,15 +953,15 @@ struct RGWSLOInfo {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(entries, bl);
-    ::encode(total_size, bl);
+    encode(entries, bl);
+    encode(total_size, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator& bl) {
      DECODE_START(1, bl);
-     ::decode(entries, bl);
-     ::decode(total_size, bl);
+     decode(entries, bl);
+     decode(total_size, bl);
      DECODE_FINISH(bl);
   }
 };
@@ -964,7 +978,7 @@ protected:
   const char *supplied_etag;
   const char *if_match;
   const char *if_nomatch;
-  const char *copy_source;
+  std::string copy_source;
   const char *copy_source_range;
   RGWBucketInfo copy_source_bucket_info;
   string copy_source_tenant_name;
@@ -995,7 +1009,6 @@ public:
                 supplied_etag(NULL),
                 if_match(NULL),
                 if_nomatch(NULL),
-                copy_source(NULL),
                 copy_source_range(NULL),
                 copy_source_range_fst(0),
                 copy_source_range_lst(0),
@@ -1194,7 +1207,6 @@ public:
 class RGWPutMetadataObject : public RGWOp {
 protected:
   RGWAccessControlPolicy policy;
-  string placement_rule;
   boost::optional<ceph::real_time> delete_at;
   const char *dlo_manifest;
 
@@ -1307,7 +1319,7 @@ public:
     copy_if_newer = false;
   }
 
-  static bool parse_copy_location(const string& src,
+  static bool parse_copy_location(const boost::string_view& src,
                                   string& bucket_name,
                                   rgw_obj_key& object);
 
@@ -1398,12 +1410,14 @@ class RGWPutLC : public RGWOp {
 protected:
   int len;
   char *data;
+  const char *content_md5;
   string cookie;
 
 public:
   RGWPutLC() {
     len = 0;
-    data = NULL;
+    data = nullptr;
+    content_md5 = nullptr;
   }
   ~RGWPutLC() override {
     free(data);
@@ -1586,8 +1600,30 @@ class RGWCompleteMultipart : public RGWOp {
 protected:
   string upload_id;
   string etag;
+  string version_id;
   char *data;
   int len;
+
+  struct MPSerializer {
+    librados::IoCtx ioctx;
+    rados::cls::lock::Lock lock;
+    librados::ObjectWriteOperation op;
+    std::string oid;
+    bool locked;
+
+    MPSerializer() : lock("RGWCompleteMultipart"), locked(false)
+      {}
+
+    int try_lock(const std::string& oid, utime_t dur);
+
+    int unlock() {
+      return lock.unlock(&ioctx, oid);
+    }
+
+    void clear_locked() {
+      locked = false;
+    }
+  } serializer;
 
 public:
   RGWCompleteMultipart() {
@@ -1601,6 +1637,7 @@ public:
   int verify_permission() override;
   void pre_exec() override;
   void execute() override;
+  void complete() override;
 
   virtual int get_params() = 0;
   void send_response() override = 0;
@@ -1884,38 +1921,73 @@ static inline void format_xattr(std::string &xattr)
  * map(<attr_name, attr_contents>, where attr_name is RGW_ATTR_PREFIX.HTTP_NAME)
  * s: The request state
  * attrs: will be filled up with attrs mapped as <attr_name, attr_contents>
+ * On success returns 0.
+ * On failure returns a negative error code.
  *
  */
-static inline void rgw_get_request_metadata(CephContext *cct,
-					    struct req_info& info,
-					    map<string, bufferlist>& attrs,
-					    const bool allow_empty_attrs = true)
+static inline int rgw_get_request_metadata(CephContext* const cct,
+                                           struct req_info& info,
+                                           std::map<std::string, ceph::bufferlist>& attrs,
+                                           const bool allow_empty_attrs = true)
 {
   static const std::set<std::string> blacklisted_headers = {
       "x-amz-server-side-encryption-customer-algorithm",
       "x-amz-server-side-encryption-customer-key",
       "x-amz-server-side-encryption-customer-key-md5"
   };
-  map<string, string>::iterator iter;
-  for (iter = info.x_meta_map.begin(); iter != info.x_meta_map.end(); ++iter) {
-    const string &name(iter->first);
-    string &xattr(iter->second);
+
+  size_t valid_meta_count = 0;
+  for (auto& kv : info.x_meta_map) {
+    const std::string& name = kv.first;
+    std::string& xattr = kv.second;
+
     if (blacklisted_headers.count(name) == 1) {
       lsubdout(cct, rgw, 10) << "skipping x>> " << name << dendl;
       continue;
-    }
-    if (allow_empty_attrs || !xattr.empty()) {
+    } else if (allow_empty_attrs || !xattr.empty()) {
       lsubdout(cct, rgw, 10) << "x>> " << name << ":" << xattr << dendl;
       format_xattr(xattr);
-      string attr_name(RGW_ATTR_PREFIX);
+
+      std::string attr_name(RGW_ATTR_PREFIX);
       attr_name.append(name);
-      map<string, bufferlist>::value_type v(attr_name, bufferlist());
-      std::pair < map<string, bufferlist>::iterator, bool >
-	rval(attrs.insert(v));
-      bufferlist& bl(rval.first->second);
+
+      /* Check roughly whether we aren't going behind the limit on attribute
+       * name. Passing here doesn't guarantee that an OSD will accept that
+       * as ObjectStore::get_max_attr_name_length() can set the limit even
+       * lower than the "osd_max_attr_name_len" configurable.  */
+      const size_t max_attr_name_len = \
+        cct->_conf->get_val<size_t>("rgw_max_attr_name_len");
+      if (max_attr_name_len && attr_name.length() > max_attr_name_len) {
+        return -ENAMETOOLONG;
+      }
+
+      /* Similar remarks apply to the check for value size. We're veryfing
+       * it early at the RGW's side as it's being claimed in /info. */
+      const size_t max_attr_size = \
+        cct->_conf->get_val<size_t>("rgw_max_attr_size");
+      if (max_attr_size && xattr.length() > max_attr_size) {
+        return -EFBIG;
+      }
+
+      /* Swift allows administrators to limit the number of metadats items
+       * send _in a single request_. */
+      const auto rgw_max_attrs_num_in_req = \
+        cct->_conf->get_val<size_t>("rgw_max_attrs_num_in_req");
+      if (rgw_max_attrs_num_in_req &&
+          ++valid_meta_count > rgw_max_attrs_num_in_req) {
+        return -E2BIG;
+      }
+
+      auto rval = attrs.emplace(std::move(attr_name), ceph::bufferlist());
+      /* At the moment the value of the freshly created attribute key-value
+       * pair is an empty bufferlist. */
+
+      ceph::bufferlist& bl = rval.first->second;
       bl.append(xattr.c_str(), xattr.size() + 1);
     }
   }
+
+  return 0;
 } /* rgw_get_request_metadata */
 
 static inline void encode_delete_at_attr(boost::optional<ceph::real_time> delete_at,
@@ -1926,7 +1998,7 @@ static inline void encode_delete_at_attr(boost::optional<ceph::real_time> delete
   } 
 
   bufferlist delatbl;
-  ::encode(*delete_at, delatbl);
+  encode(*delete_at, delatbl);
   attrs[RGW_ATTR_DELETE_AT] = delatbl;
 } /* encode_delete_at_attr */
 
@@ -1965,7 +2037,7 @@ static inline void complete_etag(MD5& hash, string *etag)
   char etag_buf[CEPH_CRYPTO_MD5_DIGESTSIZE];
   char etag_buf_str[CEPH_CRYPTO_MD5_DIGESTSIZE * 2 + 16];
 
-  hash.Final((byte *)etag_buf);
+  hash.Final((unsigned char *)etag_buf);
   buf_to_hex((const unsigned char *)etag_buf, CEPH_CRYPTO_MD5_DIGESTSIZE,
 	    etag_buf_str);
 
@@ -2020,7 +2092,7 @@ public:
 };
 
 class RGWPutBucketPolicy : public RGWOp {
-  int len;
+  int len = 0;
   char *data = nullptr;
 public:
   RGWPutBucketPolicy() = default;

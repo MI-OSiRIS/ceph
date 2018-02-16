@@ -18,7 +18,7 @@
 class MLogAck : public Message {
 public:
   uuid_d fsid;
-  version_t last;
+  version_t last = 0;
   std::string channel;
 
   MLogAck() : Message(MSG_LOGACK) {}
@@ -33,16 +33,18 @@ public:
   }
 
   void encode_payload(uint64_t features) override {
-    ::encode(fsid, payload);
-    ::encode(last, payload);
-    ::encode(channel, payload);
+    using ceph::encode;
+    encode(fsid, payload);
+    encode(last, payload);
+    encode(channel, payload);
   }
   void decode_payload() override {
+    using ceph::decode;
     bufferlist::iterator p = payload.begin();
-    ::decode(fsid, p);
-    ::decode(last, p);
+    decode(fsid, p);
+    decode(last, p);
     if (!p.end())
-      ::decode(channel, p);
+      decode(channel, p);
   }
 };
 

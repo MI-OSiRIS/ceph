@@ -14,10 +14,10 @@
 #ifndef MGR_CLIENT_H_
 #define MGR_CLIENT_H_
 
+#include "msg/Connection.h"
 #include "msg/Dispatcher.h"
 #include "mon/MgrMap.h"
-
-#include "msg/Connection.h"
+#include "osd/OSDHealthMetric.h"
 
 #include "common/perf_counters.h"
 #include "common/Timer.h"
@@ -59,6 +59,7 @@ protected:
   Mutex lock = {"MgrClient::lock"};
 
   uint32_t stats_period = 0;
+  uint32_t stats_threshold = 0;
   SafeTimer timer;
 
   CommandTable<MgrCommand> command_table;
@@ -78,6 +79,7 @@ protected:
   std::string service_name, daemon_name;
   std::map<std::string,std::string> daemon_metadata;
   std::map<std::string,std::string> daemon_status;
+  std::vector<OSDHealthMetric> osd_health_metrics;
 
   void reconnect();
   void _send_open();
@@ -99,9 +101,7 @@ public:
   bool handle_mgr_configure(MMgrConfigure *m);
   bool handle_command_reply(MCommandReply *m);
 
-  void send_report();
   void send_pgstats();
-
   void set_pgstats_cb(std::function<MPGStats*()> cb_)
   {
     Mutex::Locker l(lock);
@@ -117,8 +117,12 @@ public:
     const std::string& name,
     const std::map<std::string,std::string>& metadata);
   int service_daemon_update_status(
-    const std::map<std::string,std::string>& status);
+    std::map<std::string,std::string>&& status);
+  void update_osd_health(std::vector<OSDHealthMetric>&& metrics);
+
+private:
+  void send_stats();
+  void send_report();
 };
 
 #endif
-

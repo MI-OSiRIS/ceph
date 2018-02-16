@@ -188,8 +188,9 @@ void MonmapMonitor::on_active()
     mon->has_ever_joined = true;
   }
 
-  if (mon->is_leader())
-    mon->clog->info() << "monmap " << *mon->monmap;
+  if (mon->is_leader()) {
+    mon->clog->debug() << "monmap " << *mon->monmap;
+  }
 
   apply_mon_features(mon->get_quorum_mon_features());
 }
@@ -280,7 +281,7 @@ bool MonmapMonitor::preprocess_command(MonOpRequestRef op)
       p->decode(bl);
     }
 
-    assert(p != NULL);
+    assert(p);
 
     if (prefix == "mon getmap") {
       p->encode(rdata, m->get_connection()->get_features());
@@ -307,8 +308,10 @@ bool MonmapMonitor::preprocess_command(MonOpRequestRef op)
       rdata.append(ds);
       ss << "dumped monmap epoch " << p->get_epoch();
     }
-    if (p != mon->monmap)
+    if (p != mon->monmap) {
        delete p;
+       p = nullptr;
+    }
 
   } else if (prefix == "mon feature ls") {
    
@@ -727,31 +730,6 @@ bool MonmapMonitor::should_propose(double& delay)
   return true;
 }
 
-void MonmapMonitor::get_health(list<pair<health_status_t, string> >& summary,
-			       list<pair<health_status_t, string> > *detail,
-			       CephContext *cct) const
-{
-  int max = mon->monmap->size();
-  int actual = mon->get_quorum().size();
-  if (actual < max) {
-    ostringstream ss;
-    ss << (max-actual) << " mons down, quorum " << mon->get_quorum() << " " << mon->get_quorum_names();
-    summary.push_back(make_pair(HEALTH_WARN, ss.str()));
-    if (detail) {
-      set<int> q = mon->get_quorum();
-      for (int i=0; i<max; i++) {
-	if (q.count(i) == 0) {
-	  ostringstream ss;
-	  ss << "mon." << mon->monmap->get_name(i) << " (rank " << i
-	     << ") addr " << mon->monmap->get_addr(i)
-	     << " is down (out of quorum)";
-	  detail->push_back(make_pair(HEALTH_WARN, ss.str()));
-	}
-      }
-    }
-  }
-}
-
 int MonmapMonitor::get_monmap(bufferlist &bl)
 {
   version_t latest_ver = get_last_committed();
@@ -791,7 +769,7 @@ void MonmapMonitor::check_sub(Subscription *sub)
   if (sub->next <= epoch) {
     mon->send_latest_monmap(sub->session->con.get());
     if (sub->onetime) {
-      mon->with_session_map([this, sub](MonSessionMap& session_map) {
+      mon->with_session_map([sub](MonSessionMap& session_map) {
 	  session_map.remove_sub(sub);
 	});
     } else {

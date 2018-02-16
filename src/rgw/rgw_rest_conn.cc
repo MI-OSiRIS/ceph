@@ -98,14 +98,8 @@ int RGWRESTConn::forward(const rgw_user& uid, req_info& info, obj_version *objv,
   return req.forward_request(key, info, max_response, inbl, outbl);
 }
 
-class StreamObjData : public RGWGetDataCB {
-  rgw_obj obj;
-public:
-    explicit StreamObjData(rgw_obj& _obj) : obj(_obj) {}
-};
-
 int RGWRESTConn::put_obj_init(const rgw_user& uid, rgw_obj& obj, uint64_t obj_size,
-                                      map<string, bufferlist>& attrs, RGWRESTStreamWriteRequest **req)
+			      map<string, bufferlist>& attrs, RGWRESTStreamWriteRequest **req)
 {
   string url;
   int ret = get_url(url);
@@ -156,7 +150,7 @@ int RGWRESTConn::get_obj(const rgw_user& uid, req_info *info /* optional */, rgw
                          const real_time *mod_ptr, const real_time *unmod_ptr,
                          uint32_t mod_zone_id, uint64_t mod_pg_ver,
                          bool prepend_metadata, bool get_op, bool rgwx_stat,
-                         bool sync_manifest, RGWGetDataCB *cb,
+                         bool sync_manifest, bool skip_decrypt, RGWGetDataCB *cb,
                          RGWRESTStreamRWRequest **req)
 {
   string url;
@@ -174,6 +168,9 @@ int RGWRESTConn::get_obj(const rgw_user& uid, req_info *info /* optional */, rgw
   }
   if (sync_manifest) {
     params.push_back(param_pair_t(RGW_SYS_PARAM_PREFIX "sync-manifest", ""));
+  }
+  if (skip_decrypt) {
+    params.push_back(param_pair_t(RGW_SYS_PARAM_PREFIX "skip-decrypt", ""));
   }
   if (!obj.key.instance.empty()) {
     const string& instance = obj.key.instance;

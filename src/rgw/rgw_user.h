@@ -37,11 +37,13 @@ struct RGWUID
   void encode(bufferlist& bl) const {
     string s;
     user_id.to_str(s);
-    ::encode(s, bl);
+    using ceph::encode;
+    encode(s, bl);
   }
   void decode(bufferlist::iterator& bl) {
     string s;
-    ::decode(s, bl);
+    using ceph::decode;
+    decode(s, bl);
     user_id.from_str(s);
   }
 };
@@ -163,6 +165,7 @@ struct RGWUserAdminOpState {
   __u8 system;
   __u8 exclusive;
   __u8 fetch_stats;
+  __u8 sync_stats;
   std::string caps;
   RGWObjVersionTracker objv;
   uint32_t op_mask;
@@ -334,6 +337,10 @@ struct RGWUserAdminOpState {
     fetch_stats = is_fetch_stats;
   }
 
+  void set_sync_stats(__u8 is_sync_stats) {
+    sync_stats = is_sync_stats;
+  }
+
   void set_user_info(RGWUserInfo& user_info) {
     user_id = user_info.user_id;
     info = user_info;
@@ -459,8 +466,7 @@ struct RGWUserAdminOpState {
     int sub_buf_size = RAND_SUBUSER_LEN + 1;
     char sub_buf[RAND_SUBUSER_LEN + 1];
 
-    if (gen_rand_alphanumeric_upper(g_ceph_context, sub_buf, sub_buf_size) < 0)
-      return "";
+    gen_rand_alphanumeric_upper(g_ceph_context, sub_buf, sub_buf_size);
 
     rand_suffix = sub_buf;
     if (rand_suffix.empty())
@@ -688,7 +694,7 @@ public:
   friend class RGWUserCapPool;
 };
 
-/* Wrapers for admin API functionality */
+/* Wrappers for admin API functionality */
 
 class RGWUserAdminOp_User
 {

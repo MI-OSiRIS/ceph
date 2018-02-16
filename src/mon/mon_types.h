@@ -23,23 +23,21 @@
 #include "common/bit_str.h"
 #include "include/Context.h"
 
-#define PAXOS_PGMAP      0  // before osd, for pg kick to behave
-#define PAXOS_MDSMAP     1
-#define PAXOS_OSDMAP     2
-#define PAXOS_LOG        3
-#define PAXOS_MONMAP     4
-#define PAXOS_AUTH       5
-#define PAXOS_MGR        6
-#define PAXOS_MGRSTAT    7
-#define PAXOS_HEALTH    8
-#define PAXOS_NUM        9
+#define PAXOS_MDSMAP     0
+#define PAXOS_OSDMAP     1
+#define PAXOS_LOG        2
+#define PAXOS_MONMAP     3
+#define PAXOS_AUTH       4
+#define PAXOS_MGR        5
+#define PAXOS_MGRSTAT    6
+#define PAXOS_HEALTH     7
+#define PAXOS_NUM        8
 
 inline const char *get_paxos_name(int p) {
   switch (p) {
   case PAXOS_MDSMAP: return "mdsmap";
   case PAXOS_MONMAP: return "monmap";
   case PAXOS_OSDMAP: return "osdmap";
-  case PAXOS_PGMAP: return "pgmap";
   case PAXOS_LOG: return "logm";
   case PAXOS_AUTH: return "auth";
   case PAXOS_MGR: return "mgr";
@@ -94,19 +92,19 @@ struct FeatureMap {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(m, bl);
+    encode(m, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator& p) {
     DECODE_START(1, p);
-    ::decode(m, p);
+    decode(m, p);
     DECODE_FINISH(p);
   }
 
   void dump(Formatter *f) const {
     for (auto& p : m) {
-      f->open_object_section(ceph_entity_type_name(p.first));
+      f->open_array_section(ceph_entity_type_name(p.first));
       for (auto& q : p.second) {
 	f->open_object_section("group");
         std::stringstream ss;
@@ -156,21 +154,21 @@ struct LevelDBStoreStats {
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(bytes_total, bl);
-    ::encode(bytes_sst, bl);
-    ::encode(bytes_log, bl);
-    ::encode(bytes_misc, bl);
-    ::encode(last_update, bl);
+    encode(bytes_total, bl);
+    encode(bytes_sst, bl);
+    encode(bytes_log, bl);
+    encode(bytes_misc, bl);
+    encode(last_update, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
-    ::decode(bytes_total, p);
-    ::decode(bytes_sst, p);
-    ::decode(bytes_log, p);
-    ::decode(bytes_misc, p);
-    ::decode(last_update, p);
+    decode(bytes_total, p);
+    decode(bytes_sst, p);
+    decode(bytes_log, p);
+    decode(bytes_misc, p);
+    decode(last_update, p);
     DECODE_FINISH(p);
   }
 
@@ -208,34 +206,34 @@ struct DataStats {
 
   void encode(bufferlist &bl) const {
     ENCODE_START(3, 1, bl);
-    ::encode(fs_stats.byte_total, bl);
-    ::encode(fs_stats.byte_used, bl);
-    ::encode(fs_stats.byte_avail, bl);
-    ::encode(fs_stats.avail_percent, bl);
-    ::encode(last_update, bl);
-    ::encode(store_stats, bl);
+    encode(fs_stats.byte_total, bl);
+    encode(fs_stats.byte_used, bl);
+    encode(fs_stats.byte_avail, bl);
+    encode(fs_stats.avail_percent, bl);
+    encode(last_update, bl);
+    encode(store_stats, bl);
     ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
     // we moved from having fields in kb to fields in byte
     if (struct_v > 2) {
-      ::decode(fs_stats.byte_total, p);
-      ::decode(fs_stats.byte_used, p);
-      ::decode(fs_stats.byte_avail, p);
+      decode(fs_stats.byte_total, p);
+      decode(fs_stats.byte_used, p);
+      decode(fs_stats.byte_avail, p);
     } else {
       uint64_t t;
-      ::decode(t, p);
+      decode(t, p);
       fs_stats.byte_total = t*1024;
-      ::decode(t, p);
+      decode(t, p);
       fs_stats.byte_used = t*1024;
-      ::decode(t, p);
+      decode(t, p);
       fs_stats.byte_avail = t*1024;
     }
-    ::decode(fs_stats.avail_percent, p);
-    ::decode(last_update, p);
+    decode(fs_stats.avail_percent, p);
+    decode(last_update, p);
     if (struct_v > 1)
-      ::decode(store_stats, p);
+      decode(store_stats, p);
 
     DECODE_FINISH(p);
   }
@@ -252,14 +250,14 @@ struct ScrubResult {
 
   void encode(bufferlist& bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(prefix_crc, bl);
-    ::encode(prefix_keys, bl);
+    encode(prefix_crc, bl);
+    encode(prefix_keys, bl);
     ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator& p) {
     DECODE_START(1, p);
-    ::decode(prefix_crc, p);
-    ::decode(prefix_keys, p);
+    decode(prefix_crc, p);
+    decode(prefix_keys, p);
     DECODE_FINISH(p);
   }
   void dump(Formatter *f) const {
@@ -281,7 +279,7 @@ struct ScrubResult {
 };
 WRITE_CLASS_ENCODER(ScrubResult)
 
-static inline ostream& operator<<(ostream& out, const ScrubResult& r) {
+inline ostream& operator<<(ostream& out, const ScrubResult& r) {
   return out << "ScrubResult(keys " << r.prefix_keys << " crc " << r.prefix_crc << ")";
 }
 
@@ -474,12 +472,12 @@ public:
 
   void encode(bufferlist& bl) const {
     ENCODE_START(HEAD_VERSION, COMPAT_VERSION, bl);
-    ::encode(features, bl);
+    encode(features, bl);
     ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator& p) {
     DECODE_START(COMPAT_VERSION, p);
-    ::decode(features, p);
+    decode(features, p);
     DECODE_FINISH(p);
   }
 };
@@ -490,6 +488,7 @@ namespace ceph {
     namespace mon {
       constexpr mon_feature_t FEATURE_KRAKEN(     (1ULL << 0));
       constexpr mon_feature_t FEATURE_LUMINOUS(   (1ULL << 1));
+      constexpr mon_feature_t FEATURE_MIMIC(      (1ULL << 2));
 
       constexpr mon_feature_t FEATURE_RESERVED(   (1ULL << 63));
       constexpr mon_feature_t FEATURE_NONE(       (0ULL));
@@ -503,6 +502,7 @@ namespace ceph {
         return (
 	  FEATURE_KRAKEN |
 	  FEATURE_LUMINOUS |
+	  FEATURE_MIMIC |
 	  FEATURE_NONE
 	  );
       }
@@ -520,6 +520,7 @@ namespace ceph {
         return (
 	  FEATURE_KRAKEN |
 	  FEATURE_LUMINOUS |
+	  FEATURE_MIMIC |
 	  FEATURE_NONE
 	  );
       }
@@ -536,26 +537,29 @@ static inline const char *ceph::features::mon::get_feature_name(uint64_t b) {
     return "kraken";
   } else if (f == FEATURE_LUMINOUS) {
     return "luminous";
+  } else if (f == FEATURE_MIMIC) {
+    return "mimic";
   } else if (f == FEATURE_RESERVED) {
     return "reserved";
   }
   return "unknown";
 }
 
-static inline
-mon_feature_t ceph::features::mon::get_feature_by_name(std::string n) {
+inline mon_feature_t ceph::features::mon::get_feature_by_name(std::string n) {
 
   if (n == "kraken") {
     return FEATURE_KRAKEN;
   } else if (n == "luminous") {
     return FEATURE_LUMINOUS;
+  } else if (n == "mimic") {
+    return FEATURE_MIMIC;
   } else if (n == "reserved") {
     return FEATURE_RESERVED;
   }
   return FEATURE_NONE;
 }
 
-static inline ostream& operator<<(ostream& out, const mon_feature_t& f) {
+inline ostream& operator<<(ostream& out, const mon_feature_t& f) {
   out << "mon_feature_t(";
   f.print(out);
   out << ")";

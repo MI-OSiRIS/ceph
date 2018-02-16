@@ -44,7 +44,7 @@
 #include "include/buffer.h"
 #include "include/encoding.h"
 #include "include/ceph_hash.h"
-#include "include/Spinlock.h"
+#include "include/spinlock.h"
 #include "common/ceph_argparse.h"
 #include "common/Cycles.h"
 #include "common/Cond.h"
@@ -188,18 +188,18 @@ struct DummyBlock {
   int a = 1, b = 2, c = 3, d = 4;
   void encode(bufferlist &bl) const {
     ENCODE_START(1, 1, bl);
-    ::encode(a, bl);
-    ::encode(b, bl);
-    ::encode(c, bl);
-    ::encode(d, bl);
+    encode(a, bl);
+    encode(b, bl);
+    encode(c, bl);
+    encode(d, bl);
     ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator &bl) {
     DECODE_START(1, bl);
-    ::decode(a, bl);
-    ::decode(b, bl);
-    ::decode(c, bl);
-    ::decode(d, bl);
+    decode(a, bl);
+    decode(b, bl);
+    decode(c, bl);
+    decode(d, bl);
     DECODE_FINISH(bl);
   }
 };
@@ -214,9 +214,9 @@ double buffer_encode_decode()
   for (int i = 0; i < count; i++) {
     bufferlist b;
     DummyBlock dummy_block;
-    ::encode(dummy_block, b);
+    encode(dummy_block, b);
     bufferlist::iterator iter = b.begin();
-    ::decode(dummy_block, iter);
+    decode(dummy_block, iter);
   }
   uint64_t stop = Cycles::rdtsc();
   return Cycles::to_seconds(stop - start)/count;
@@ -261,18 +261,18 @@ double buffer_encode()
   for (int i = 0; i < count; i++) {
     bufferlist b;
     DummyBlock dummy_block;
-    ::encode(dummy_block, b);
+    encode(dummy_block, b);
     uint64_t start = Cycles::rdtsc();
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
-    ::encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
+    encode(dummy_block, b);
     total += Cycles::rdtsc() - start;
   }
   return Cycles::to_seconds(total)/(count*10);
@@ -488,7 +488,7 @@ class CountEvent: public EventCallback {
 
  public:
   explicit CountEvent(std::atomic<int64_t> *atomic): count(atomic) {}
-  void do_request(int id) override {
+  void do_request(uint64_t id) override {
     (*count)--;
   }
 };
@@ -737,7 +737,7 @@ double sfence()
 double test_spinlock()
 {
   int count = 1000000;
-  Spinlock lock;
+  ceph::spinlock lock;
   uint64_t start = Cycles::rdtsc();
   for (int i = 0; i < count; i++) {
     lock.lock();
@@ -785,8 +785,9 @@ double perf_timer()
   uint64_t start = Cycles::rdtsc();
   Mutex::Locker l(lock);
   for (int i = 0; i < count; i++) {
-    timer.add_event_after(12345, c[i]);
-    timer.cancel_event(c[i]);
+    if (timer.add_event_after(12345, c[i])) {
+      timer.cancel_event(c[i]);
+    }
   }
   uint64_t stop = Cycles::rdtsc();
   delete[] c;

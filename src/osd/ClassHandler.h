@@ -36,7 +36,7 @@ public:
   };
 
   struct ClassFilter {
-    struct ClassHandler::ClassData *cls;
+    struct ClassHandler::ClassData *cls = nullptr;
     std::string name;
     cls_cxx_filter_factory_t fn;
 
@@ -59,7 +59,7 @@ public:
     ClassHandler *handler;
     void *handle;
 
-    bool whitelisted;
+    bool whitelisted = false;
 
     map<string, ClassMethod> methods_map;
     map<string, ClassFilter> filters_map;

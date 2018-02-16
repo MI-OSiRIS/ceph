@@ -19,11 +19,6 @@
 #include "mon/MonMap.h"
 #include "common/Graylog.h"
 
-#ifdef DARWIN
-#include <sys/param.h>
-#include <sys/mount.h>
-#endif // DARWIN
-
 #define dout_subsys ceph_subsys_monc
 
 int parse_log_client_options(CephContext *cct,
@@ -88,7 +83,7 @@ int parse_log_client_options(CephContext *cct,
     return r;
   }
 
-  fsid = cct->_conf->fsid;
+  fsid = cct->_conf->get_val<uuid_d>("fsid");
   host = cct->_conf->host;
   return 0;
 }
@@ -283,7 +278,7 @@ Message *LogClient::_get_mon_log_message()
   unsigned num_unsent = last_log - last_log_sent;
   unsigned num_send;
   if (cct->_conf->mon_client_max_log_entries_per_message > 0)
-    num_send = MIN(num_unsent, (unsigned)cct->_conf->mon_client_max_log_entries_per_message);
+    num_send = std::min(num_unsent, (unsigned)cct->_conf->mon_client_max_log_entries_per_message);
   else
     num_send = num_unsent;
 

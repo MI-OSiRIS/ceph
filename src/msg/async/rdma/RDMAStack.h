@@ -40,13 +40,14 @@ class RDMADispatcher {
 
   std::thread t;
   CephContext *cct;
-  Infiniband::CompletionQueue* tx_cq;
-  Infiniband::CompletionQueue* rx_cq;
-  Infiniband::CompletionChannel *tx_cc, *rx_cc;
+  Infiniband::CompletionQueue* tx_cq = nullptr;
+  Infiniband::CompletionQueue* rx_cq = nullptr;
+  Infiniband::CompletionChannel *tx_cc = nullptr, *rx_cc = nullptr;
   EventCallbackRef async_handler;
   bool done = false;
   std::atomic<uint64_t> num_dead_queue_pair = {0};
   std::atomic<uint64_t> num_qp_conn = {0};
+  int post_backlog = 0;
   Mutex lock; // protect `qp_conns`, `dead_queue_pairs`
   // qp_num -> InfRcConnection
   // The main usage of `qp_conns` is looking up connection by qp_num,
@@ -80,7 +81,7 @@ class RDMADispatcher {
     RDMADispatcher *dispatcher;
    public:
     C_handle_cq_async(RDMADispatcher *w): dispatcher(w) {}
-    void do_request(int fd) {
+    void do_request(uint64_t fd) {
       // worker->handle_tx_event();
       dispatcher->handle_async_event();
     }
@@ -107,6 +108,7 @@ class RDMADispatcher {
   }
   RDMAStack* get_stack() { return stack; }
   RDMAConnectedSocketImpl* get_conn_lockless(uint32_t qp);
+  QueuePair* get_qp(uint32_t qp);
   void erase_qpn_lockless(uint32_t qpn);
   void erase_qpn(uint32_t qpn);
   Infiniband::CompletionQueue* get_tx_cq() const { return tx_cq; }
@@ -137,7 +139,7 @@ class RDMAWorker : public Worker {
     RDMAWorker *worker;
     public:
     C_handle_cq_tx(RDMAWorker *w): worker(w) {}
-    void do_request(int fd) {
+    void do_request(uint64_t fd) {
       worker->handle_pending_message();
     }
   };
@@ -225,7 +227,7 @@ class RDMAConnectedSocketImpl : public ConnectedSocketImpl {
     bool active;
    public:
     C_handle_connection(RDMAConnectedSocketImpl *w): csi(w), active(true) {}
-    void do_request(int fd) {
+    void do_request(uint64_t fd) {
       if (active)
         csi->handle_connection();
     }

@@ -20,11 +20,11 @@
 #include "mds/locks.h"
 
 class MLock : public Message {
-  int32_t     action;  // action type
-  int32_t     asker;  // who is initiating this request
+  int32_t     action = 0;  // action type
+  int32_t     asker = 0;  // who is initiating this request
   metareqid_t reqid;  // for remote lock requests
   
-  __u16      lock_type;  // lock object type
+  __u16      lock_type = 0;  // lock object type
   MDSCacheObjectInfo object_info;  
   
   bufferlist lockdata;  // and possibly some data
@@ -73,21 +73,23 @@ public:
   }
   
   void decode_payload() override {
+    using ceph::decode;
     bufferlist::iterator p = payload.begin();
-    ::decode(asker, p);
-    ::decode(action, p);
-    ::decode(reqid, p);
-    ::decode(lock_type, p);
-    ::decode(object_info, p);
-    ::decode(lockdata, p);
+    decode(asker, p);
+    decode(action, p);
+    decode(reqid, p);
+    decode(lock_type, p);
+    decode(object_info, p);
+    decode(lockdata, p);
   }
   void encode_payload(uint64_t features) override {
-    ::encode(asker, payload);
-    ::encode(action, payload);
-    ::encode(reqid, payload);
-    ::encode(lock_type, payload);
-    ::encode(object_info, payload);
-    ::encode(lockdata, payload);
+    using ceph::encode;
+    encode(asker, payload);
+    encode(action, payload);
+    encode(reqid, payload);
+    encode(lock_type, payload);
+    encode(object_info, payload);
+    encode(lockdata, payload);
   }
 
 };

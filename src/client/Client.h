@@ -16,39 +16,37 @@
 #ifndef CEPH_CLIENT_H
 #define CEPH_CLIENT_H
 
-#include "include/types.h"
-
-// stl
-#include <string>
-#include <memory>
-#include <set>
-#include <map>
-#include <fstream>
-using std::set;
-using std::map;
-using std::fstream;
-
-#include "include/unordered_set.h"
-#include "include/unordered_map.h"
+#include "common/CommandTable.h"
+#include "common/Finisher.h"
+#include "common/Mutex.h"
+#include "common/Timer.h"
+#include "common/cmdparse.h"
+#include "common/compiler_extensions.h"
+#include "include/cephfs/ceph_statx.h"
 #include "include/filepath.h"
 #include "include/interval_set.h"
 #include "include/lru.h"
+#include "include/types.h"
+#include "include/unordered_map.h"
+#include "include/unordered_set.h"
 #include "mds/mdstypes.h"
 #include "msg/Dispatcher.h"
 #include "msg/Messenger.h"
-
-#include "common/Mutex.h"
-#include "common/Timer.h"
-#include "common/Finisher.h"
-#include "common/compiler_extensions.h"
-#include "common/cmdparse.h"
-#include "common/CommandTable.h"
-
 #include "osdc/ObjectCacher.h"
 
 #include "InodeRef.h"
+#include "MetaSession.h"
 #include "UserPerm.h"
-#include "include/cephfs/ceph_statx.h"
+
+#include <fstream>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+
+using std::set;
+using std::map;
+using std::fstream;
 
 class FSMap;
 class FSMapUser;
@@ -62,7 +60,6 @@ class MClientRequest;
 class MClientRequestForward;
 struct MClientLease;
 class MClientCaps;
-class MClientCapRelease;
 
 struct DirStat;
 struct LeaseStat;
@@ -124,7 +121,6 @@ struct SnapRealm;
 struct Fh;
 struct CapSnap;
 
-struct MetaSession;
 struct MetaRequest;
 class ceph_lock_state_t;
 
@@ -138,6 +134,9 @@ typedef int (*client_remount_callback_t)(void *handle);
 typedef int (*client_getgroups_callback_t)(void *handle, gid_t **sgids);
 typedef void(*client_switch_interrupt_callback_t)(void *handle, void *data);
 typedef mode_t (*client_umask_callback_t)(void *handle);
+
+/* Callback for delegation recalls */
+typedef void (*ceph_deleg_cb_t)(Fh *fh, void *priv);
 
 struct client_callback_args {
   void *handle;
@@ -276,7 +275,6 @@ class Client : public Dispatcher, public md_config_obs_t {
   client_getgroups_callback_t getgroups_cb;
   client_umask_callback_t umask_cb;
   bool can_invalidate_dentries;
-  bool require_remount;
 
   Finisher async_ino_invalidator;
   Finisher async_dentry_invalidator;
@@ -317,7 +315,7 @@ protected:
   epoch_t cap_epoch_barrier;
 
   // mds sessions
-  map<mds_rank_t, MetaSession*> mds_sessions;  // mds -> push seq
+  map<mds_rank_t, MetaSession> mds_sessions;  // mds -> push seq
   list<Cond*> waiting_for_mdsmap;
 
   // FSMap, for when using mds_command
@@ -404,6 +402,8 @@ protected:
 public:
   entity_name_t get_myname() { return messenger->get_myname(); } 
   void _sync_write_commit(Inode *in);
+  void wait_on_list(list<Cond*>& ls);
+  void signal_cond_list(list<Cond*>& ls);
 
 protected:
   std::unique_ptr<Filer>             filer;
@@ -423,13 +423,15 @@ protected:
   void _reset_faked_inos();
   vinodeno_t _map_faked_ino(ino_t ino);
 
+  std::map<snapid_t, int> ll_snap_ref;
+
   Inode*                 root;
   map<Inode*, InodeRef>  root_parents;
   Inode*                 root_ancestor;
   LRU                    lru;    // lru list of Dentry's in our local metadata cache.
 
-  // all inodes with caps sit on either cap_list or delayed_caps.
-  xlist<Inode*> delayed_caps, cap_list;
+  // dirty_list keeps all the dirty inodes before flushing.
+  xlist<Inode*> delayed_list, dirty_list;
   int num_flushing_caps;
   ceph::unordered_map<inodeno_t,SnapRealm*> snap_realms;
 
@@ -482,8 +484,6 @@ protected:
 
   // helpers
   void wake_inode_waiters(MetaSession *s);
-  void wait_on_list(list<Cond*>& ls);
-  void signal_cond_list(list<Cond*>& ls);
 
   void wait_on_context_list(list<Context*>& ls);
   void signal_context_list(list<Context*>& ls);
@@ -494,17 +494,19 @@ protected:
   void put_inode(Inode *in, int n=1);
   void close_dir(Dir *dir);
 
+  // same as unmount() but for when the client_lock is already held
+  void _unmount();
+
   friend class C_Client_FlushComplete; // calls put_inode()
   friend class C_Client_CacheInvalidate;  // calls ino_invalidate_cb
   friend class C_Client_DentryInvalidate;  // calls dentry_invalidate_cb
   friend class C_Block_Sync; // Calls block map and protected helpers
-  friend class C_C_Tick; // Asserts on client_lock
   friend class C_Client_RequestInterrupt;
   friend class C_Client_Remount;
+  friend class C_Deleg_Timeout; // Asserts on client_lock, called when a delegation is unreturned
   friend void intrusive_ptr_release(Inode *in);
 
   //int get_cache_size() { return lru.lru_get_size(); }
-  //void set_cache_size(int m) { lru.lru_set_max(m); }
 
   /**
    * Don't call this with in==NULL, use get_or_create for that
@@ -535,8 +537,9 @@ protected:
   void trim_cache(bool trim_kernel_dcache=false);
   void trim_cache_for_reconnect(MetaSession *s);
   void trim_dentry(Dentry *dn);
-  void trim_caps(MetaSession *s, int max);
+  void trim_caps(MetaSession *s, uint64_t max);
   void _invalidate_kernel_dcache();
+  void _trim_negative_child_dentries(InodeRef& in);
   
   void dump_inode(Formatter *f, Inode *in, set<Inode*>& did, bool disconnected);
   void dump_cache(Formatter *f);  // debug
@@ -631,7 +634,6 @@ protected:
   void remove_cap(Cap *cap, bool queue_release);
   void remove_all_caps(Inode *in);
   void remove_session_caps(MetaSession *session);
-  void mark_caps_dirty(Inode *in, int caps);
   int mark_caps_flushing(Inode *in, ceph_tid_t *ptid);
   void adjust_session_flushing_caps(Inode *in, MetaSession *old_s, MetaSession *new_s);
   void flush_caps_sync();
@@ -729,10 +731,12 @@ protected:
   void flush_mdlog_sync();
   void flush_mdlog(MetaSession *session);
   
+  xlist<Inode*> &get_dirty_list() { return dirty_list; }
   // ----------------------
   // fs ops.
 private:
 
+  uint32_t deleg_timeout;
   void fill_dirent(struct dirent *de, const char *name, int type, uint64_t ino, loff_t next_off);
 
   // some readdir helpers
@@ -759,6 +763,7 @@ private:
   int _release_fh(Fh *fh);
   void _put_fh(Fh *fh);
 
+  int _do_remount(void);
 
   struct C_Readahead : public Context {
     Client *client;
@@ -829,9 +834,11 @@ private:
 	      const char *data_pool, bool *created, const UserPerm &perms);
 
   loff_t _lseek(Fh *fh, loff_t offset, int whence);
-  int _read(Fh *fh, int64_t offset, uint64_t size, bufferlist *bl);
-  int _write(Fh *fh, int64_t offset, uint64_t size, const char *buf,
+  int64_t _read(Fh *fh, int64_t offset, uint64_t size, bufferlist *bl);
+  int64_t _write(Fh *fh, int64_t offset, uint64_t size, const char *buf,
           const struct iovec *iov, int iovcnt);
+  int64_t _preadv_pwritev_locked(Fh *f, const struct iovec *iov,
+	      unsigned iovcnt, int64_t offset, bool write, bool clamp_to_int);
   int _preadv_pwritev(int fd, const struct iovec *iov, unsigned iovcnt, int64_t offset, bool write);
   int _flush(Fh *fh);
   int _fsync(Fh *fh, bool syncdataonly);
@@ -939,6 +946,10 @@ private:
   mds_rank_t _get_random_up_mds() const;
 
   int _ll_getattr(Inode *in, int caps, const UserPerm& perms);
+  int _lookup_parent(Inode *in, const UserPerm& perms, Inode **parent=NULL);
+  int _lookup_name(Inode *in, Inode *parent, const UserPerm& perms);
+  int _lookup_ino(inodeno_t ino, const UserPerm& perms, Inode **inode=NULL);
+  bool _ll_forget(Inode *in, int count);
 
 public:
   int mount(const std::string &mount_root, const UserPerm& perms,
@@ -956,6 +967,7 @@ public:
 
   // crap
   int chdir(const char *s, std::string &new_cwd, const UserPerm& perms);
+  void _getcwd(std::string& cwd, const UserPerm& perms);
   void getcwd(std::string& cwd, const UserPerm& perms);
 
   // namespace ops
@@ -1137,11 +1149,14 @@ public:
   Inode *ll_get_inode(vinodeno_t vino);
   int ll_lookup(Inode *parent, const char *name, struct stat *attr,
 		Inode **out, const UserPerm& perms);
+  int ll_lookup_inode(struct inodeno_t ino, const UserPerm& perms, Inode **inode);
   int ll_lookupx(Inode *parent, const char *name, Inode **out,
 			struct ceph_statx *stx, unsigned want, unsigned flags,
 			const UserPerm& perms);
   bool ll_forget(Inode *in, int count);
   bool ll_put(Inode *in);
+  int ll_get_snap_ref(snapid_t snap);
+
   int ll_getattr(Inode *in, struct stat *st, const UserPerm& perms);
   int ll_getattrx(Inode *in, struct ceph_statx *stx, unsigned int want,
 		  unsigned int flags, const UserPerm& perms);
@@ -1210,6 +1225,8 @@ public:
 
   int ll_read(Fh *fh, loff_t off, loff_t len, bufferlist *bl);
   int ll_write(Fh *fh, loff_t off, loff_t len, const char *data);
+  int64_t ll_readv(struct Fh *fh, const struct iovec *iov, int iovcnt, int64_t off);
+  int64_t ll_writev(struct Fh *fh, const struct iovec *iov, int iovcnt, int64_t off);
   loff_t ll_lseek(Fh *fh, loff_t offset, int whence);
   int ll_flush(Fh *fh);
   int ll_fsync(Fh *fh, bool syncdataonly);
@@ -1238,6 +1255,9 @@ public:
   const char** get_tracked_conf_keys() const override;
   void handle_conf_change(const struct md_config_t *conf,
 	                          const std::set <std::string> &changed) override;
+  uint32_t get_deleg_timeout() { return deleg_timeout; }
+  int set_deleg_timeout(uint32_t timeout);
+  int ll_delegation(Fh *fh, unsigned cmd, ceph_deleg_cb_t cb, void *priv);
 };
 
 /**

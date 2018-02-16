@@ -32,8 +32,8 @@ protected:
 
   void SetUp() override;
   void TearDown() override;
-  rados_t cluster;
-  rados_ioctx_t ioctx;
+  rados_t cluster = nullptr;
+  rados_ioctx_t ioctx = nullptr;
   bool cleanup;
 };
 
@@ -94,9 +94,9 @@ protected:
 
   void SetUp() override;
   void TearDown() override;
-  rados_t cluster;
-  rados_ioctx_t ioctx;
-  uint64_t alignment;
+  rados_t cluster = nullptr; 
+  rados_ioctx_t ioctx = nullptr;
+  uint64_t alignment = 0;
   bool cleanup;
 };
 
@@ -118,7 +118,7 @@ protected:
   void TearDown() override;
   librados::Rados &cluster;
   librados::IoCtx ioctx;
-  uint64_t alignment;
+  uint64_t alignment = 0;
   bool cleanup;
 };
 
@@ -148,8 +148,8 @@ protected:
 
   void SetUp() override;
   void TearDown() override;
-  rados_t cluster;
-  rados_ioctx_t ioctx;
+  rados_t cluster = nullptr;
+  rados_ioctx_t ioctx = nullptr;
   std::string nspace;
   bool cleanup;
 };
@@ -207,11 +207,11 @@ protected:
 
   void SetUp() override;
   void TearDown() override;
-  rados_t cluster;
-  rados_ioctx_t ioctx;
+  rados_t cluster = nullptr;
+  rados_ioctx_t ioctx = nullptr;
   bool cleanup;
   std::string nspace;
-  uint64_t alignment;
+  uint64_t alignment = 0;
 };
 
 class RadosTestECPP : public RadosTestPP {
@@ -230,7 +230,7 @@ protected:
   librados::IoCtx ioctx;
   bool cleanup;
   std::string nspace;
-  uint64_t alignment;
+  uint64_t alignment = 0;
 };
 
 /**

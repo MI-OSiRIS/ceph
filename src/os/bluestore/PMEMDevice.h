@@ -41,7 +41,7 @@ public:
 
   void aio_submit(IOContext *ioc) override;
 
-  int collect_metadata(std::string prefix, map<std::string,std::string> *pm) const override;
+  int collect_metadata(const std::string& prefix, map<std::string,std::string> *pm) const override;
 
   int read(uint64_t off, uint64_t len, bufferlist *pbl,
 	   IOContext *ioc,
@@ -60,6 +60,13 @@ public:
   int invalidate_cache(uint64_t off, uint64_t len) override;
   int open(const std::string &path) override;
   void close() override;
+
+private:
+  bool is_valid_io(uint64_t off, uint64_t len) const {
+    return (len > 0 &&
+            off < size &&
+            off + len <= size);
+  }
 };
 
 #endif

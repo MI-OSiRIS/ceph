@@ -1,7 +1,8 @@
 #
 # More information at
-#  https://wiki.ceph.com/Community/Ceph_contributors_list_maintenance_guide
+#  http://tracker.ceph.com/projects/ceph/wiki/Ceph_contributors_list_maintenance_guide
 #
+# See .githubmap for GitHub username contributors
 # See .organizationmap for organization affiliation
 # See .peoplemap for unique list of people
 #
@@ -90,6 +91,7 @@ Dmitry Yatsushkevich <dyatsushkevich@mirantis.com> <dmitry.yatsushkevich@gmail.c
 Dominik Hannen <cantares1+github@gmail.com> <dhxgit@users.noreply.github.com>
 Donghai Xu <xu.donghai@h3c.com>
 Dongmao Zhang <deanraccoon@gmail.com>
+Dongsheng Yang <dongsheng.yang@easystack.cn>
 Edward Yang <eyang@us.fujitsu.com> <root@gluster5.gfs.fsw.fujitsu.com>
 Enming Zhang <enming.zhang@umcloud.com>
 Eric Lee <eric.lee@hgst.com>
@@ -112,6 +114,7 @@ François Lafont <flafdivers@free.fr> <francois.lafont@crdp.ac-versailles.fr>
 François Lafont <flafdivers@free.fr> <francois.lafont@ac-versailles.fr>
 Frank Filz <ffilz@redhat.com>
 Frank Filz <ffilz@redhat.com> <ffilzlnx@mindspring.com>
+Fufei Shang <shangfufei@inspur.com>
 Gabriel Sentucq <perso@kazhord.fr>
 Gary Lowell <gary.lowell@inktank.com>
 Gary Lowell <gary.lowell@inktank.com> <glowell@flab.ops.newdream.net>
@@ -152,8 +155,7 @@ Hong Zhangoole <hong.zhangoole@gmail.com>
 Huamin Chen <hchen@redhat.com>
 Huang Jun <hjwsm1989@gmail.com>
 Ignacio Bravo <ibravo@hotmail.com>
-Igor Fedotov <ifedotov@mirantis.com>
-Igor Fedotov <ifedotov@mirantis.com> <root@osscr03r06s11.local.lan>
+Igor Fedotov <ifedotov@suse.com>
 Ilja Slepnev <islepnev@gmail.com>
 Ilya Shipitsin <chipitsine@gmail.com> <ilia@localhost.localdomain>
 Ilya Dryomov <idryomov@redhat.com> <idryomov@gmail.com>
@@ -188,6 +190,7 @@ Jianjian huo <jianjian.huo@ssi.samsung.com> <samuel.huo@gmail.com>
 Jingkai Yuan <jingkai.yuan@intel.com>
 Ji Chen <insomnia@139.com>
 Jie Li <li.jieA@h3c.com>
+Jing Chen <jeegnchen@gmail.com>
 João Eduardo Luís <joao.luis@inktank.com>
 João Eduardo Luís <joao.luis@inktank.com> <joao@inktank.com>
 João Eduardo Luís <joao@redhat.com>
@@ -231,12 +234,15 @@ Luo Kexue <luo.kexue@zte.com.cn>
 Luo Runbing <runsisi@hust.edu.cn>
 Luo Runbing <runsisi@zte.com.cn>
 Li Hongjie <lihongjie@cmss.chinamobile.com>
-Li Wang <li.wang@kylin-cloud.com> <liwang@ubuntukylin.com>
+Li Wang <laurence.liwang@gmail.com> <li.wang@kylin-cloud.com>
+Li Wang <laurence.liwang@gmail.com> <liwang@ubuntukylin.com>
 Linfei Hou <hou.linfei@h3c.com>
 Liu Hong <liuhong@cmss.chinamobile.com>
+Liu Lei <liul124@chinaunicom.cn>
 Liu Peiyan <liu.peiyang@h3c.com>
 Li Tianqing <tianqing@unitedstack.com>
 Liu Yang <yippeetry@gmail.com>
+Liuzhong Chen <liuzhong.chen@easystack.cn>
 Yankun Li <liyankun@unitedstack.com>
 Yankun Li <liyankun@unitedstack.com> <lioveni99@gmail.com>
 Lluis Pamies-Juarez <lluis.pamies-juarez@hgst.com> <lluis@pamies.cat>
@@ -268,8 +274,11 @@ Michael Rodriguez <michael@newdream.net> <michael@squid.newdream.net>
 Michal Koutný <mkoutny@suse.com>
 Min Chen <minchen@ubuntukylin.com>
 MingXin Liu <mingxin.liu@kylin-cloud.com> <mingxinliu@ubuntukylin.com>
+Mingqiao Wu <wumingqiao@inspur.com>
 Mingyue Zhao <zhao.mingyue@h3c.com>
 Mykola Golub <mgolub@mirantis.com> <mgolub@zhuzha.mirantis.lviv.net>
+Mykola Golub <to.my.trociny@gmail.com>
+Mykola Golub <mgolub@suse.com>
 Myoungwon Oh <omwmw@sk.com>
 Nathan Cutler <ncutler@suse.com>
 Nathan Cutler <ncutler@suse.com> <nculter@suse.com>
@@ -292,6 +301,7 @@ Patrick McGarry <pmcgarry@redhat.com> <pmcgarry@gmail.com>
 Pan Liu <pan.liu@istuary.com> <liupan1111@gmail.com>
 Pavan Rallabhandi <pavan.rallabhandi@sandisk.com> <pavanrallabhandis@gmail.com>
 Pavan Rallabhandi <PRallabhandi@walmartlabs.com> <root@ceph-node1.homeoffice.wal-mart.com>
+Pengcheng Zhang <pengcheng.zhang@easystack.cn>
 Pete Zaitcev <zaitcev@redhat.com> <zaitcev@kotori.zaitcev.us>
 Petertc Chu <petertc.chu@gmail.com>
 Pierre Chaumont <pierre.chaumont31@gmail.com>
@@ -360,6 +370,7 @@ Sebastien Ponce <sebastien.ponce@cern.ch> root <root@lxbre43a05.cern.ch>
 Sergey Arkhipov <nineseconds@yandex.ru>
 Shanggao Qiu <qiushanggao@qq.com>
 Shotaro Kawaguchi <kawaguchi.s@jp.fujitsu.com>
+Shanchun Lv <lvshanchun@gmail.com>
 Shawn Chen <cxwshawn@gmail.com>
 Shehbaz Jaffer <shehbaz.jaffer@mail.utoronto.ca> <shehbazjaffer007@gmail.com>
 Shinobu Kinjo <shinobu@redhat.com> <shinobu@linux.com> 
@@ -372,6 +383,7 @@ Shun Song <song.shun3@zte.com.cn>
 Shun Song <song.shun3@zte.com.cn> <songshun134@126.com>
 Shun Song <song.shun3@zte.com.cn> <root@clove83.zte.com.cn>
 Shylesh Kumar <shmohan@redhat.com> <shylesh.mohan@gmail.com>
+Sibei Gao <gaosb@inspur.com>
 Sirisha Guduru <SGuduru@walmartlabs.com>
 Song Baisen <song.baisen@zte.com.cn>
 Song Weibin <song.weibin@zte.com.cn>
@@ -446,6 +458,8 @@ Xinze Chi <xinze@xsky.com>
 Xinze Chi <xinze@xsky.com> <xmdxcxz@gmail.com>
 Xu Biao <xubiao.codeyz@gmail.com>
 Xuan Liu <liu.xuan@h3c.com>
+XueYu Bai <baixueyu@inspur.com>
+Yang Wang <yang.wang@easystack.cn>
 Yannick Atchy Dalama <yannick.atchy.dalama@gmail.com>
 Yankun Li <liyankun@unitedstack.com> <YankunLi@users.noreply.github.com>
 Yan, Zheng <zheng.z.yan@intel.com>
@@ -466,6 +480,7 @@ Yehuda Sadeh <ysadehwe@redhat.com> <yehuda@redhat.com>
 Yehuda Sadeh <ysadehwe@redhat.com> <yehuda@rehat.com>
 Yehuda Sadeh <ysadehwe@redhat.com> <ysadeh@redhat.com>
 Yehuda Sadeh <ysadehwe@redhat.com> <yehuda@redhat.com.>
+Ying He <heyingbj@inspur.com>
 Yongqiang He <he.yongqiang@h3c.com>
 Yongyue Sun <abioy.sun@gmail.com>
 You Ji <youji@ebay.com>
@@ -487,6 +502,7 @@ Zhang Lei <zhanglei@trendytech.com.cn>
 Zhang Lei <zhanglei@trendytech.com.cn> <243290414@qq.com>
 Zhang Shaowen <zhang_shaowen@139.com>
 Zhang Zezhu <zhang.zezhu@zte.com.cn>
+Zongyou Yao <yaozongyou@vip.qq.com>
 Guo Zhandong <guozhandong@cmss.chinamobile.com>
 Guo Zhandong <guozhandong@cmss.chinamobile.com> <18896723979@139.com>
 Guo Zhandong <guozhandong@cmss.chinamobile.com> <idealguo@139.com>

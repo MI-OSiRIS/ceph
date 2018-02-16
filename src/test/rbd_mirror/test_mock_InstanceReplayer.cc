@@ -5,7 +5,6 @@
 #include "test/rbd_mirror/test_mock_fixture.h"
 #include "test/rbd_mirror/mock/MockContextWQ.h"
 #include "test/rbd_mirror/mock/MockSafeTimer.h"
-#include "tools/rbd_mirror/ImageDeleter.h"
 #include "tools/rbd_mirror/ImageReplayer.h"
 #include "tools/rbd_mirror/InstanceWatcher.h"
 #include "tools/rbd_mirror/InstanceReplayer.h"
@@ -49,10 +48,6 @@ struct Threads<librbd::MockTestImageCtx> {
   }
 };
 
-template <>
-struct ImageDeleter<librbd::MockTestImageCtx> {
-};
-
 template<>
 struct ServiceDaemon<librbd::MockTestImageCtx> {
   MOCK_METHOD3(add_or_update_attribute,
@@ -71,7 +66,6 @@ struct ImageReplayer<librbd::MockTestImageCtx> {
 
   static ImageReplayer *create(
     Threads<librbd::MockTestImageCtx> *threads,
-    ImageDeleter<librbd::MockTestImageCtx>* image_deleter,
     InstanceWatcher<librbd::MockTestImageCtx> *instance_watcher,
     RadosRef local, const std::string &local_mirror_uuid, int64_t local_pool_id,
     const std::string &global_image_id) {
@@ -121,16 +115,17 @@ namespace rbd {
 namespace mirror {
 
 using ::testing::_;
+using ::testing::DoAll;
 using ::testing::InSequence;
 using ::testing::Invoke;
 using ::testing::Return;
+using ::testing::ReturnArg;
 using ::testing::ReturnRef;
 using ::testing::WithArg;
 
 class TestMockInstanceReplayer : public TestMockFixture {
 public:
   typedef Threads<librbd::MockTestImageCtx> MockThreads;
-  typedef ImageDeleter<librbd::MockTestImageCtx> MockImageDeleter;
   typedef ImageReplayer<librbd::MockTestImageCtx> MockImageReplayer;
   typedef InstanceReplayer<librbd::MockTestImageCtx> MockInstanceReplayer;
   typedef InstanceWatcher<librbd::MockTestImageCtx> MockInstanceWatcher;
@@ -146,8 +141,8 @@ public:
   void expect_add_event_after(MockThreads &mock_threads,
                               Context** timer_ctx = nullptr) {
     EXPECT_CALL(*mock_threads.timer, add_event_after(_, _))
-      .WillOnce(WithArg<1>(
-        Invoke([this, &mock_threads, timer_ctx](Context *ctx) {
+      .WillOnce(DoAll(
+        WithArg<1>(Invoke([this, &mock_threads, timer_ctx](Context *ctx) {
           assert(mock_threads.timer_lock.is_locked());
           if (timer_ctx != nullptr) {
             *timer_ctx = ctx;
@@ -159,7 +154,8 @@ public:
                 ctx->complete(0);
               }), 0);
           }
-        })));
+        })),
+        ReturnArg<1>()));
   }
 
   void expect_cancel_event(MockThreads &mock_threads, bool canceled) {
@@ -171,11 +167,10 @@ public:
 TEST_F(TestMockInstanceReplayer, AcquireReleaseImage) {
   MockThreads mock_threads(m_threads);
   MockServiceDaemon mock_service_daemon;
-  MockImageDeleter mock_image_deleter;
   MockInstanceWatcher mock_instance_watcher;
   MockImageReplayer mock_image_replayer;
   MockInstanceReplayer instance_replayer(
-    &mock_threads, &mock_service_daemon, &mock_image_deleter,
+    &mock_threads, &mock_service_daemon,
     rbd::mirror::RadosRef(new librados::Rados(m_local_io_ctx)),
     "local_mirror_uuid", m_local_io_ctx.get_id());
   std::string global_image_id("global_image_id");
@@ -242,11 +237,10 @@ TEST_F(TestMockInstanceReplayer, AcquireReleaseImage) {
 TEST_F(TestMockInstanceReplayer, RemoveFinishedImage) {
   MockThreads mock_threads(m_threads);
   MockServiceDaemon mock_service_daemon;
-  MockImageDeleter mock_image_deleter;
   MockInstanceWatcher mock_instance_watcher;
   MockImageReplayer mock_image_replayer;
   MockInstanceReplayer instance_replayer(
-    &mock_threads, &mock_service_daemon, &mock_image_deleter,
+    &mock_threads, &mock_service_daemon,
     rbd::mirror::RadosRef(new librados::Rados(m_local_io_ctx)),
     "local_mirror_uuid", m_local_io_ctx.get_id());
   std::string global_image_id("global_image_id");

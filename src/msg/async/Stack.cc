@@ -14,6 +14,8 @@
  *
  */
 
+#include <mutex>
+
 #include "include/compat.h"
 #include "common/Cond.h"
 #include "common/errno.h"
@@ -37,7 +39,7 @@ std::function<void ()> NetworkStack::add_thread(unsigned i)
   Worker *w = workers[i];
   return [this, w]() {
       char tp_name[16];
-      sprintf(tp_name, "msgr-worker-%d", w->id);
+      sprintf(tp_name, "msgr-worker-%u", w->id);
       ceph_pthread_setname(pthread_self(), tp_name);
       const uint64_t EventMaxWaitUs = 30000000;
       w->center.set_owner();
@@ -123,9 +125,9 @@ NetworkStack::NetworkStack(CephContext *c, const string &t): type(t), started(fa
 
 void NetworkStack::start()
 {
-  pool_spin.lock();
+  std::unique_lock<decltype(pool_spin)> lk(pool_spin);
+
   if (started) {
-    pool_spin.unlock();
     return ;
   }
 
@@ -136,7 +138,7 @@ void NetworkStack::start()
     spawn_worker(i, std::move(thread));
   }
   started = true;
-  pool_spin.unlock();
+  lk.unlock();
 
   for (unsigned i = 0; i < num_workers; ++i)
     workers[i]->wait_for_init();
@@ -170,7 +172,7 @@ Worker* NetworkStack::get_worker()
 
 void NetworkStack::stop()
 {
-  Spinlock::Locker l(pool_spin);
+  std::lock_guard<decltype(pool_spin)> lk(pool_spin);
   for (unsigned i = 0; i < num_workers; ++i) {
     workers[i]->done = true;
     workers[i]->center.wakeup();
@@ -188,7 +190,7 @@ class C_drain : public EventCallback {
   explicit C_drain(size_t c)
       : drain_lock("C_drain::drain_lock"),
         drain_count(c) {}
-  void do_request(int id) override {
+  void do_request(uint64_t id) override {
     Mutex::Locker l(drain_lock);
     drain_count--;
     if (drain_count == 0) drain_cond.Signal();

@@ -23,6 +23,8 @@
 #include <dirent.h>
 #include <sys/xattr.h>
 #include <sys/uio.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 
 #ifdef __linux__
 #include <limits.h>
@@ -30,6 +32,7 @@
 
 #include <map>
 #include <vector>
+#include <thread>
 
 TEST(LibCephFS, OpenEmptyComponent) {
 
@@ -362,12 +365,13 @@ TEST(LibCephFS, DirLs) {
 
   // test getdents
   struct dirent *getdents_entries;
-  getdents_entries = (struct dirent *)malloc((r + 2) * sizeof(*getdents_entries));
+  size_t getdents_entries_len = (r + 2) * sizeof(*getdents_entries);
+  getdents_entries = (struct dirent *)malloc(getdents_entries_len);
 
   int count = 0;
   std::vector<std::string> found;
   while (true) {
-    int len = ceph_getdents(cmount, ls_dir, (char *)getdents_entries, r * sizeof(*getdents_entries));
+    int len = ceph_getdents(cmount, ls_dir, (char *)getdents_entries, getdents_entries_len);
     if (len == 0)
       break;
     ASSERT_GT(len, 0);
@@ -1077,6 +1081,53 @@ TEST(LibCephFS, PreadvPwritev) {
   ceph_shutdown(cmount);
 }
 
+TEST(LibCephFS, LlreadvLlwritev) {
+  struct ceph_mount_info *cmount;
+  ASSERT_EQ(ceph_create(&cmount, NULL), 0);
+  ASSERT_EQ(ceph_conf_read_file(cmount, NULL), 0);
+  ASSERT_EQ(0, ceph_conf_parse_env(cmount, NULL));
+  ASSERT_EQ(ceph_mount(cmount, NULL), 0);
+
+  int mypid = getpid();
+  char filename[256];
+
+  sprintf(filename, "test_llreadvllwritevfile%u", mypid);
+
+  Inode *root, *file;
+  ASSERT_EQ(ceph_ll_lookup_root(cmount, &root), 0);
+
+  Fh *fh;
+  struct ceph_statx stx;
+  UserPerm *perms = ceph_mount_perms(cmount);
+
+  ASSERT_EQ(ceph_ll_create(cmount, root, filename, 0666,
+		    O_RDWR|O_CREAT|O_TRUNC, &file, &fh, &stx, 0, 0, perms), 0);
+
+  /* Reopen read-only */
+  char out0[] = "hello ";
+  char out1[] = "world\n";
+  struct iovec iov_out[2] = {
+	{out0, sizeof(out0)},
+	{out1, sizeof(out1)},
+  };
+  char in0[sizeof(out0)];
+  char in1[sizeof(out1)];
+  struct iovec iov_in[2] = {
+	{in0, sizeof(in0)},
+	{in1, sizeof(in1)},
+  };
+  ssize_t nwritten = iov_out[0].iov_len + iov_out[1].iov_len;
+  ssize_t nread = iov_in[0].iov_len + iov_in[1].iov_len;
+
+  ASSERT_EQ(ceph_ll_writev(cmount, fh, iov_out, 2, 0), nwritten);
+  ASSERT_EQ(ceph_ll_readv(cmount, fh, iov_in, 2, 0), nread);
+  ASSERT_EQ(0, strncmp((const char*)iov_in[0].iov_base, (const char*)iov_out[0].iov_base, iov_out[0].iov_len));
+  ASSERT_EQ(0, strncmp((const char*)iov_in[1].iov_base, (const char*)iov_out[1].iov_base, iov_out[1].iov_len));
+
+  ceph_ll_close(cmount, fh);
+  ceph_shutdown(cmount);
+}
+
 TEST(LibCephFS, StripeUnitGran) {
   struct ceph_mount_info *cmount;
   ASSERT_EQ(ceph_create(&cmount, NULL), 0);
@@ -1739,8 +1790,8 @@ TEST(LibCephFS, ClearSetuid) {
   Fh *fh;
   Inode *in;
   struct ceph_statx stx;
-  const mode_t after_mode = S_IRWXU | S_IRWXG;
-  const mode_t before_mode = S_IRWXU | S_IRWXG | S_ISUID | S_ISGID;
+  const mode_t after_mode = S_IRWXU;
+  const mode_t before_mode = S_IRWXU | S_ISUID | S_ISGID;
   const unsigned want = CEPH_STATX_UID|CEPH_STATX_GID|CEPH_STATX_MODE;
   UserPerm *usercred = ceph_mount_perms(cmount);
 
@@ -1788,6 +1839,35 @@ TEST(LibCephFS, ClearSetuid) {
   ASSERT_TRUE(stx.stx_mask & CEPH_STATX_MODE);
   ASSERT_EQ(stx.stx_mode & (mode_t)ALLPERMS, after_mode);
 
+  /* test chown with supplementary groups, and chown with/without exe bit */
+  uid_t u = 65534;
+  gid_t g = 65534;
+  gid_t gids[] = {65533,65532};
+  UserPerm *altcred = ceph_userperm_new(u, g, sizeof gids / sizeof gids[0], gids);
+  stx.stx_uid = u;
+  stx.stx_gid = g;
+  mode_t m = S_ISGID|S_ISUID|S_IRUSR|S_IWUSR;
+  stx.stx_mode = m;
+  ASSERT_EQ(ceph_ll_setattr(cmount, in, &stx, CEPH_STATX_MODE|CEPH_SETATTR_UID|CEPH_SETATTR_GID, rootcred), 0);
+  ASSERT_EQ(ceph_ll_getattr(cmount, in, &stx, CEPH_STATX_MODE, 0, altcred), 0);
+  ASSERT_EQ(stx.stx_mode&(mode_t)ALLPERMS, m);
+  /* not dropped without exe bit */
+  stx.stx_gid = gids[0];
+  ASSERT_EQ(ceph_ll_setattr(cmount, in, &stx, CEPH_SETATTR_GID, altcred), 0);
+  ASSERT_EQ(ceph_ll_getattr(cmount, in, &stx, CEPH_STATX_MODE, 0, altcred), 0);
+  ASSERT_EQ(stx.stx_mode&(mode_t)ALLPERMS, m);
+  /* now check dropped with exe bit */
+  m = S_ISGID|S_ISUID|S_IRWXU;
+  stx.stx_mode = m;
+  ASSERT_EQ(ceph_ll_setattr(cmount, in, &stx, CEPH_STATX_MODE, altcred), 0);
+  ASSERT_EQ(ceph_ll_getattr(cmount, in, &stx, CEPH_STATX_MODE, 0, altcred), 0);
+  ASSERT_EQ(stx.stx_mode&(mode_t)ALLPERMS, m);
+  stx.stx_gid = gids[1];
+  ASSERT_EQ(ceph_ll_setattr(cmount, in, &stx, CEPH_SETATTR_GID, altcred), 0);
+  ASSERT_EQ(ceph_ll_getattr(cmount, in, &stx, CEPH_STATX_MODE, 0, altcred), 0);
+  ASSERT_EQ(stx.stx_mode&(mode_t)ALLPERMS, m&(S_IRWXU|S_IRWXG|S_IRWXO));
+  ceph_userperm_destroy(altcred);
+
   ASSERT_EQ(ceph_ll_close(cmount, fh), 0);
   ceph_shutdown(cmount);
 }
@@ -1828,4 +1908,40 @@ TEST(LibCephFS, OperationsOnRoot)
   ASSERT_EQ(ceph_symlink(cmount, "nonExistingDir", "/"), -EEXIST);
 
   ceph_shutdown(cmount);
+}
+
+static void shutdown_racer_func()
+{
+  const int niter = 32;
+  struct ceph_mount_info *cmount;
+  int i;
+
+  for (i = 0; i < niter; ++i) {
+    ASSERT_EQ(ceph_create(&cmount, NULL), 0);
+    ASSERT_EQ(ceph_conf_read_file(cmount, NULL), 0);
+    ASSERT_EQ(0, ceph_conf_parse_env(cmount, NULL));
+    ASSERT_EQ(ceph_mount(cmount, "/"), 0);
+    ceph_shutdown(cmount);
+  }
+}
+
+// See tracker #20988
+TEST(LibCephFS, ShutdownRace)
+{
+  const int nthreads = 128;
+  std::thread threads[nthreads];
+
+  // Need a bunch of fd's for this test
+  struct rlimit rold, rnew;
+  ASSERT_EQ(getrlimit(RLIMIT_NOFILE, &rold), 0);
+  rnew = rold;
+  rnew.rlim_cur = rnew.rlim_max;
+  ASSERT_EQ(setrlimit(RLIMIT_NOFILE, &rnew), 0);
+
+  for (int i = 0; i < nthreads; ++i)
+    threads[i] = std::thread(shutdown_racer_func);
+
+  for (int i = 0; i < nthreads; ++i)
+    threads[i].join();
+  ASSERT_EQ(setrlimit(RLIMIT_NOFILE, &rold), 0);
 }

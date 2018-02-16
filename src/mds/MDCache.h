@@ -17,6 +17,8 @@
 #ifndef CEPH_MDCACHE_H
 #define CEPH_MDCACHE_H
 
+#include <string_view>
+
 #include "include/types.h"
 #include "include/filepath.h"
 #include "include/elist.h"
@@ -123,7 +125,8 @@ class MDCache {
   LRU lru;   // dentry lru for expiring items from cache
   LRU bottom_lru; // dentries that should be trimmed ASAP
  protected:
-  ceph::unordered_map<vinodeno_t,CInode*> inode_map;  // map of inodes by ino
+  ceph::unordered_map<inodeno_t,CInode*> inode_map;  // map of head inodes by ino
+  map<vinodeno_t, CInode*> snap_inode_map;  // map of snap inodes by ino
   CInode *root;                            // root inode
   CInode *myin;                            // .ceph/mds%d dir
 
@@ -146,6 +149,38 @@ class MDCache {
   bool exceeded_size_limit;
 
 public:
+  static uint64_t cache_limit_inodes(void) {
+    return g_conf->get_val<int64_t>("mds_cache_size");
+  }
+  static uint64_t cache_limit_memory(void) {
+    return g_conf->get_val<uint64_t>("mds_cache_memory_limit");
+  }
+  static double cache_reservation(void) {
+    return g_conf->get_val<double>("mds_cache_reservation");
+  }
+  static double cache_mid(void) {
+    return g_conf->get_val<double>("mds_cache_mid");
+  }
+  static double cache_health_threshold(void) {
+    return g_conf->get_val<double>("mds_health_cache_threshold");
+  }
+  double cache_toofull_ratio(void) const {
+    uint64_t inode_limit = cache_limit_inodes();
+    double inode_reserve = inode_limit*(1.0-cache_reservation());
+    double memory_reserve = cache_limit_memory()*(1.0-cache_reservation());
+    return fmax(0.0, fmax((cache_size()-memory_reserve)/memory_reserve, inode_limit == 0 ? 0.0 : (CInode::count()-inode_reserve)/inode_reserve));
+  }
+  bool cache_toofull(void) const {
+    return cache_toofull_ratio() > 0.0;
+  }
+  uint64_t cache_size(void) const {
+    return mempool::get_pool(mempool::mds_co::id).allocated_bytes();
+  }
+  bool cache_overfull(void) const {
+    uint64_t inode_limit = cache_limit_inodes();
+    return (inode_limit > 0 && CInode::count() > inode_limit*cache_health_threshold()) || (cache_size() > cache_limit_memory()*cache_health_threshold());
+  }
+
   void advance_stray() {
     stray_index = (stray_index+1)%NUM_STRAY;
   }
@@ -168,6 +203,8 @@ public:
   void force_readonly();
 
   DecayRate decayrate;
+
+  int num_shadow_inodes;
 
   int num_inodes_with_caps;
 
@@ -360,7 +397,7 @@ public:
 
   void project_rstat_inode_to_frag(CInode *cur, CDir *parent, snapid_t first,
 				   int linkunlink, SnapRealm *prealm);
-  void _project_rstat_inode_to_frag(inode_t& inode, snapid_t ofirst, snapid_t last,
+  void _project_rstat_inode_to_frag(CInode::mempool_inode & inode, snapid_t ofirst, snapid_t last,
 				    CDir *parent, int linkunlink, bool update_inode);
   void project_rstat_frag_to_inode(nest_info_t& rstat, nest_info_t& accounted_rstat,
 				   snapid_t ofirst, snapid_t last, 
@@ -499,7 +536,7 @@ public:
 
 
   void clean_open_file_lists();
-
+  void dump_openfiles(Formatter *f);
 protected:
   // [rejoin]
   bool rejoins_pending;
@@ -581,8 +618,9 @@ public:
     inodeno_t realm_ino;
     snapid_t snap_follows;
     int dirty_caps;
+    bool snapflush;
     reconnected_cap_info_t() :
-      realm_ino(0), snap_follows(0), dirty_caps(0) {}
+      realm_ino(0), snap_follows(0), dirty_caps(0), snapflush(false) {}
   };
   map<inodeno_t,map<client_t, reconnected_cap_info_t> >  reconnected_caps;   // inode -> client -> snap_follows,realmino
   map<inodeno_t,map<client_t, snapid_t> > reconnected_snaprealms;  // realmino -> client -> realmseq
@@ -592,9 +630,11 @@ public:
     info.realm_ino = inodeno_t(icr.capinfo.snaprealm);
     info.snap_follows = icr.snap_follows;
   }
-  void set_reconnected_dirty_caps(client_t client, inodeno_t ino, int dirty) {
+  void set_reconnected_dirty_caps(client_t client, inodeno_t ino, int dirty, bool snapflush) {
     reconnected_cap_info_t &info = reconnected_caps[ino][client];
     info.dirty_caps |= dirty;
+    if (snapflush)
+      info.snapflush = snapflush;
   }
   void add_reconnected_snaprealm(client_t client, inodeno_t ino, snapid_t seq) {
     reconnected_snaprealms[ino][client] = seq;
@@ -671,12 +711,12 @@ public:
   CInode *get_root() { return root; }
   CInode *get_myin() { return myin; }
 
-  // cache
-  void set_cache_size(size_t max) { lru.lru_set_max(max); }
   size_t get_cache_size() { return lru.lru_get_size(); }
 
   // trimming
-  bool trim(int max=-1, int count=-1);   // trim cache
+  bool trim(uint64_t count=0);
+private:
+  void trim_lru(uint64_t count, map<mds_rank_t, MCacheExpire*>& expiremap);
   bool trim_dentry(CDentry *dn, map<mds_rank_t, MCacheExpire*>& expiremap);
   void trim_dirfrag(CDir *dir, CDir *con,
 		    map<mds_rank_t, MCacheExpire*>& expiremap);
@@ -684,6 +724,7 @@ public:
 		  map<mds_rank_t,class MCacheExpire*>& expiremap);
   void send_expire_messages(map<mds_rank_t, MCacheExpire*>& expiremap);
   void trim_non_auth();      // trim out trimmable non-auth items
+public:
   bool trim_non_auth_subtree(CDir *directory);
   void standby_trim_segment(LogSegment *ls);
   void try_trim_non_auth_subtree(CDir *dir);
@@ -729,18 +770,35 @@ public:
 
   // inode_map
   bool have_inode(vinodeno_t vino) {
-    return inode_map.count(vino) ? true:false;
+    if (vino.snapid == CEPH_NOSNAP)
+      return inode_map.count(vino.ino) ? true : false;
+    else
+      return snap_inode_map.count(vino) ? true : false;
   }
   bool have_inode(inodeno_t ino, snapid_t snap=CEPH_NOSNAP) {
     return have_inode(vinodeno_t(ino, snap));
   }
   CInode* get_inode(vinodeno_t vino) {
-    if (have_inode(vino))
-      return inode_map[vino];
+    if (vino.snapid == CEPH_NOSNAP) {
+      auto p = inode_map.find(vino.ino);
+      if (p != inode_map.end())
+	return p->second;
+    } else {
+      auto p = snap_inode_map.find(vino);
+      if (p != snap_inode_map.end())
+	return p->second;
+    }
     return NULL;
   }
   CInode* get_inode(inodeno_t ino, snapid_t s=CEPH_NOSNAP) {
     return get_inode(vinodeno_t(ino, s));
+  }
+  CInode* lookup_snap_inode(vinodeno_t vino) {
+    auto p = snap_inode_map.lower_bound(vino);
+    if (p != snap_inode_map.end() &&
+	p->second->ino() == vino.ino && p->second->first <= vino.snapid)
+      return p->second;
+    return NULL;
   }
 
   CDir* get_dirfrag(dirfrag_t df) {
@@ -749,7 +807,7 @@ public:
       return NULL;
     return in->get_dirfrag(df.frag);
   }
-  CDir* get_dirfrag(inodeno_t ino, const string& dn) {
+  CDir* get_dirfrag(inodeno_t ino, std::string_view dn) {
     CInode *in = get_inode(ino);
     if (!in)
       return NULL;
@@ -1002,22 +1060,10 @@ protected:
   friend class C_MDC_Join;
 
 public:
-  void replicate_dir(CDir *dir, mds_rank_t to, bufferlist& bl) {
-    dirfrag_t df = dir->dirfrag();
-    ::encode(df, bl);
-    dir->encode_replica(to, bl);
-  }
-  void replicate_dentry(CDentry *dn, mds_rank_t to, bufferlist& bl) {
-    ::encode(dn->name, bl);
-    ::encode(dn->last, bl);
-    dn->encode_replica(to, bl);
-  }
+  void replicate_dir(CDir *dir, mds_rank_t to, bufferlist& bl);
+  void replicate_dentry(CDentry *dn, mds_rank_t to, bufferlist& bl);
   void replicate_inode(CInode *in, mds_rank_t to, bufferlist& bl,
-		       uint64_t features) {
-    ::encode(in->inode.ino, bl);  // bleh, minor assymetry here
-    ::encode(in->last, bl);
-    in->encode_replica(to, bl, features);
-  }
+		       uint64_t features);
   
   CDir* add_replica_dir(bufferlist::iterator& p, CInode *diri, mds_rank_t from, list<MDSInternalContextBase*>& finished);
   CDentry *add_replica_dentry(bufferlist::iterator& p, CDir *dir, list<MDSInternalContextBase*>& finished);
@@ -1126,14 +1172,16 @@ public:
   void discard_delayed_expire(CDir *dir);
 
 protected:
-  int dump_cache(const char *fn, Formatter *f,
-		  const std::string& dump_root = "",
+  int dump_cache(std::string_view fn, Formatter *f,
+		  std::string_view dump_root = "",
 		  int depth = -1);
 public:
   int dump_cache() { return dump_cache(NULL, NULL); }
-  int dump_cache(const std::string &filename);
+  int dump_cache(std::string_view filename);
   int dump_cache(Formatter *f);
-  int dump_cache(const std::string& dump_root, int depth, Formatter *f);
+  int dump_cache(std::string_view dump_root, int depth, Formatter *f);
+
+  int cache_status(Formatter *f);
 
   void dump_resolve_status(Formatter *f) const;
   void dump_rejoin_status(Formatter *f) const;
@@ -1146,7 +1194,7 @@ public:
   CInode *hack_pick_random_inode() {
     assert(!inode_map.empty());
     int n = rand() % inode_map.size();
-    ceph::unordered_map<vinodeno_t,CInode*>::iterator p = inode_map.begin();
+    auto p = inode_map.begin();
     while (n--) ++p;
     return p->second;
   }
@@ -1166,11 +1214,11 @@ protected:
   void repair_dirfrag_stats_work(MDRequestRef& mdr);
   friend class C_MDC_RepairDirfragStats;
 public:
-  void flush_dentry(const string& path, Context *fin);
+  void flush_dentry(std::string_view path, Context *fin);
   /**
    * Create and start an OP_ENQUEUE_SCRUB
    */
-  void enqueue_scrub(const string& path, const std::string &tag,
+  void enqueue_scrub(std::string_view path, std::string_view tag,
                      bool force, bool recursive, bool repair,
 		     Formatter *f, Context *fin);
   void repair_inode_stats(CInode *diri);

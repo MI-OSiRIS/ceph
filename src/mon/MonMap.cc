@@ -21,19 +21,19 @@ using ceph::Formatter;
 void mon_info_t::encode(bufferlist& bl, uint64_t features) const
 {
   ENCODE_START(2, 1, bl);
-  ::encode(name, bl);
-  ::encode(public_addr, bl, features);
-  ::encode(priority, bl);
+  encode(name, bl);
+  encode(public_addr, bl, features);
+  encode(priority, bl);
   ENCODE_FINISH(bl);
 }
 
 void mon_info_t::decode(bufferlist::iterator& p)
 {
   DECODE_START(1, p);
-  ::decode(name, p);
-  ::decode(public_addr, p);
+  decode(name, p);
+  decode(public_addr, p);
   if (struct_v >= 2) {
-    ::decode(priority, p);
+    decode(priority, p);
   }
   DECODE_FINISH(p);
 }
@@ -151,39 +151,41 @@ void MonMap::encode(bufferlist& blist, uint64_t con_features) const
   }
 
   if ((con_features & CEPH_FEATURE_MONNAMES) == 0) {
+    using ceph::encode;
     __u16 v = 1;
-    ::encode(v, blist);
-    ::encode_raw(fsid, blist);
-    ::encode(epoch, blist);
+    encode(v, blist);
+    encode_raw(fsid, blist);
+    encode(epoch, blist);
     vector<entity_inst_t> mon_inst(mon_addr.size());
     for (unsigned n = 0; n < mon_addr.size(); n++)
       mon_inst[n] = get_inst(n);
-    ::encode(mon_inst, blist, con_features);
-    ::encode(last_changed, blist);
-    ::encode(created, blist);
+    encode(mon_inst, blist, con_features);
+    encode(last_changed, blist);
+    encode(created, blist);
     return;
   }
 
   if ((con_features & CEPH_FEATURE_MONENC) == 0) {
+    using ceph::encode;
     __u16 v = 2;
-    ::encode(v, blist);
-    ::encode_raw(fsid, blist);
-    ::encode(epoch, blist);
-    ::encode(mon_addr, blist, con_features);
-    ::encode(last_changed, blist);
-    ::encode(created, blist);
+    encode(v, blist);
+    encode_raw(fsid, blist);
+    encode(epoch, blist);
+    encode(mon_addr, blist, con_features);
+    encode(last_changed, blist);
+    encode(created, blist);
   }
 
   ENCODE_START(5, 3, blist);
-  ::encode_raw(fsid, blist);
-  ::encode(epoch, blist);
-  ::encode(mon_addr, blist, con_features);
-  ::encode(last_changed, blist);
-  ::encode(created, blist);
-  ::encode(persistent_features, blist);
-  ::encode(optional_features, blist);
+  encode_raw(fsid, blist);
+  encode(epoch, blist);
+  encode(mon_addr, blist, con_features);
+  encode(last_changed, blist);
+  encode(created, blist);
+  encode(persistent_features, blist);
+  encode(optional_features, blist);
   // this superseeds 'mon_addr'
-  ::encode(mon_info, blist, con_features);
+  encode(mon_info, blist, con_features);
   ENCODE_FINISH(blist);
 }
 
@@ -191,11 +193,11 @@ void MonMap::decode(bufferlist::iterator &p)
 {
   map<string,entity_addr_t> mon_addr;
   DECODE_START_LEGACY_COMPAT_LEN_16(5, 3, 3, p);
-  ::decode_raw(fsid, p);
-  ::decode(epoch, p);
+  decode_raw(fsid, p);
+  decode(epoch, p);
   if (struct_v == 1) {
     vector<entity_inst_t> mon_inst;
-    ::decode(mon_inst, p);
+    decode(mon_inst, p);
     for (unsigned i = 0; i < mon_inst.size(); i++) {
       char n[2];
       n[0] = '0' + i;
@@ -204,16 +206,16 @@ void MonMap::decode(bufferlist::iterator &p)
       mon_addr[name] = mon_inst[i].addr;
     }
   } else {
-    ::decode(mon_addr, p);
+    decode(mon_addr, p);
   }
-  ::decode(last_changed, p);
-  ::decode(created, p);
+  decode(last_changed, p);
+  decode(created, p);
   if (struct_v >= 4) {
-    ::decode(persistent_features, p);
-    ::decode(optional_features, p);
+    decode(persistent_features, p);
+    decode(optional_features, p);
   }
   if (struct_v >= 5) {
-    ::decode(mon_info, p);
+    decode(mon_info, p);
   } else {
     // we may be decoding to an existing monmap; if we do not
     // clear the mon_info map now, we will likely incur in problems
@@ -439,31 +441,34 @@ int MonMap::build_initial(CephContext *cct, ostream& errout)
 {
   const md_config_t *conf = cct->_conf;
   // file?
-  if (!conf->monmap.empty()) {
+  const auto monmap = conf->get_val<std::string>("monmap");
+  if (!monmap.empty()) {
     int r;
     try {
-      r = read(conf->monmap.c_str());
+      r = read(monmap.c_str());
     }
     catch (const buffer::error &e) {
       r = -EINVAL;
     }
     if (r >= 0)
       return 0;
-    errout << "unable to read/decode monmap from " << conf->monmap
+    errout << "unable to read/decode monmap from " << monmap
 	 << ": " << cpp_strerror(-r) << std::endl;
     return r;
   }
 
   // fsid from conf?
-  if (!cct->_conf->fsid.is_zero()) {
-    fsid = cct->_conf->fsid;
+  const auto new_fsid = conf->get_val<uuid_d>("fsid");
+  if (!new_fsid.is_zero()) {
+    fsid = new_fsid;
   }
 
   // -m foo?
-  if (!conf->mon_host.empty()) {
-    int r = build_from_host_list(conf->mon_host, "noname-");
+  const auto mon_host = conf->get_val<std::string>("mon_host");
+  if (!mon_host.empty()) {
+    int r = build_from_host_list(mon_host, "noname-");
     if (r < 0) {
-      errout << "unable to parse addrs in '" << conf->mon_host << "'"
+      errout << "unable to parse addrs in '" << mon_host << "'"
              << std::endl;
       return r;
     }
@@ -536,7 +541,7 @@ int MonMap::build_initial(CephContext *cct, ostream& errout)
 
   if (size() == 0) {
     // no info found from conf options lets try use DNS SRV records
-    string srv_name = conf->mon_dns_srv_name;
+    string srv_name = conf->get_val<std::string>("mon_dns_srv_name");
     string domain;
     // check if domain is also provided and extract it from srv_name
     size_t idx = srv_name.find("_");

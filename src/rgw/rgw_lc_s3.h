@@ -9,6 +9,7 @@
 #include "include/str_list.h"
 #include "rgw_lc.h"
 #include "rgw_xml.h"
+#include "rgw_tag_s3.h"
 
 class LCID_S3 : public XMLObj
 {
@@ -24,6 +25,50 @@ public:
   LCPrefix_S3() {}
   ~LCPrefix_S3() override {}
   string& to_str() { return data; }
+};
+
+class LCFilter_S3 : public LCFilter, public XMLObj
+{
+ public:
+  ~LCFilter_S3() override {}
+  string& to_str() { return data; }
+  void to_xml(ostream& out){
+    out << "<Filter>";
+    stringstream ss;
+    if (has_prefix())
+      out << "<Prefix>" << prefix << "</Prefix>";
+    if (has_tags()){
+      for (const auto&kv : obj_tags.get_tags()){
+        ss << "<Tag>";
+        ss << "<Key>" << kv.first << "</Key>";
+        ss << "<Value>" << kv.second << "</Value>";
+        ss << "</Tag>";
+      }
+    }
+
+    if (has_multi_condition()) {
+      out << "<And>" << ss.str() << "</And>";
+    } else {
+      out << ss.str();
+    }
+
+    out << "</Filter>";
+  }
+  void dump_xml(Formatter *f) const {
+    f->open_object_section("Filter");
+    if (has_multi_condition())
+      f->open_object_section("And");
+    if (!prefix.empty())
+      encode_xml("Prefix", prefix, f);
+    if (has_tags()){
+      const auto& tagset_s3 = static_cast<const RGWObjTagSet_S3 &>(obj_tags);
+      tagset_s3.dump_xml(f);
+    }
+    if (has_multi_condition())
+      f->close_section(); // And;
+    f->close_section(); // Filter
+  }
+  bool xml_end(const char *el) override;
 };
 
 class LCStatus_S3 : public XMLObj
@@ -140,17 +185,26 @@ public:
 
 class LCRule_S3 : public LCRule, public XMLObj
 {
+private:
+  CephContext *cct;
 public:
-  LCRule_S3() {}
+  LCRule_S3(): cct(nullptr) {}
+  LCRule_S3(CephContext *_cct): cct(_cct) {}
   ~LCRule_S3() override {}
 
-  void to_xml(CephContext *cct, ostream& out);
+  void to_xml(ostream& out);
   bool xml_end(const char *el) override;
   bool xml_start(const char *el, const char **attr);
   void dump_xml(Formatter *f) const {
     f->open_object_section("Rule");
     encode_xml("ID", id, f);
-    encode_xml("Prefix", prefix, f);
+    // In case of an empty filter and an empty Prefix, we defer to Prefix.
+    if (!filter.empty()) {
+      const LCFilter_S3& lc_filter = static_cast<const LCFilter_S3&>(filter);
+      lc_filter.dump_xml(f);
+    } else {
+      encode_xml("Prefix", prefix, f);
+    }
     encode_xml("Status", status, f);
     if (!expiration.empty() || dm_expiration) {
       LCExpiration_S3 expir(expiration.get_days_str(), expiration.get_date(), dm_expiration);
@@ -164,7 +218,12 @@ public:
       const LCMPExpiration_S3& mp_expir = static_cast<const LCMPExpiration_S3&>(mp_expiration);
       mp_expir.dump_xml(f);
     }
+
     f->close_section(); // Rule
+  }
+
+  void set_ctx(CephContext *ctx) {
+    cct = ctx;
   }
 };
 
@@ -191,7 +250,7 @@ public:
     multimap<string, LCRule>::iterator iter;
     for (iter = rule_map.begin(); iter != rule_map.end(); ++iter) {
       LCRule_S3& rule = static_cast<LCRule_S3&>(iter->second);
-      rule.to_xml(cct, out);
+      rule.to_xml(out);
     }
     out << "</LifecycleConfiguration>";
   }

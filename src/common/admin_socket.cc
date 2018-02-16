@@ -365,7 +365,7 @@ bool AdminSocket::do_accept()
   stringstream errss;
   cmdvec.push_back(cmd);
   if (!cmdmap_from_json(cmdvec, &cmdmap, errss)) {
-    ldout(m_cct, 0) << "AdminSocket: " << errss.rdbuf() << dendl;
+    ldout(m_cct, 0) << "AdminSocket: " << errss.str() << dendl;
     VOID_TEMP_FAILURE_RETRY(close(connection_fd));
     return false;
   }
@@ -409,7 +409,8 @@ bool AdminSocket::do_accept()
     in_hook = true;
     auto match_hook = p->second;
     m_lock.Unlock();
-    bool success = match_hook->call(match, cmdmap, format, out);
+    bool success = (validate(match, cmdmap, out) &&
+                    match_hook->call(match, cmdmap, format, out));
     m_lock.Lock();
     in_hook = false;
     in_hook_cond.Signal();
@@ -437,6 +438,19 @@ bool AdminSocket::do_accept()
 
   VOID_TEMP_FAILURE_RETRY(close(connection_fd));
   return rval;
+}
+
+bool AdminSocket::validate(const std::string& command,
+			  const cmdmap_t& cmdmap,
+			  bufferlist& out) const
+{
+  stringstream os;
+  if (validate_cmd(m_cct, m_descs.at(command), cmdmap, os)) {
+    return true;
+  } else {
+    out.append(os);
+    return false;
+  }
 }
 
 int AdminSocket::register_command(std::string command, std::string cmddesc, AdminSocketHook *hook, std::string help)
@@ -501,6 +515,7 @@ public:
       }
       ostringstream ss;
       jf.close_section();
+      jf.enable_line_break();
       jf.flush(ss);
       out.append(ss.str());
     }
@@ -536,7 +551,7 @@ public:
   explicit GetdescsHook(AdminSocket *as) : m_as(as) {}
   bool call(string command, cmdmap_t &cmdmap, string format, bufferlist& out) override {
     int cmdnum = 0;
-    JSONFormatter jf(false);
+    JSONFormatter jf;
     jf.open_object_section("command_descriptions");
     for (map<string,string>::iterator p = m_as->m_descs.begin();
 	 p != m_as->m_descs.end();
@@ -550,6 +565,7 @@ public:
       cmdnum++;
     }
     jf.close_section(); // command_descriptions
+    jf.enable_line_break();
     ostringstream ss;
     jf.flush(ss);
     out.append(ss.str());

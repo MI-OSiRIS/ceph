@@ -12,7 +12,7 @@
 
 struct MOSDPGRecoveryDelete : public MOSDFastDispatchOp {
 
-  static const int HEAD_VERSION = 1;
+  static const int HEAD_VERSION = 2;
   static const int COMPAT_VERSION = 1;
 
   pg_shard_t from;
@@ -67,21 +67,22 @@ public:
   }
 
   void encode_payload(uint64_t features) {
-    ::encode(from, payload);
-    ::encode(pgid, payload);
-    ::encode(map_epoch, payload);
-    ::encode(min_epoch, payload);
-    ::encode(cost, payload);
-    ::encode(objects, payload);
+    using ceph::encode;
+    encode(from, payload);
+    encode(pgid, payload);
+    encode(map_epoch, payload);
+    encode(min_epoch, payload);
+    encode(cost, payload);
+    encode(objects, payload);
   }
   void decode_payload() {
     bufferlist::iterator p = payload.begin();
-    ::decode(from, p);
-    ::decode(pgid, p);
-    ::decode(map_epoch, p);
-    ::decode(min_epoch, p);
-    ::decode(cost, p);
-    ::decode(objects, p);
+    decode(from, p);
+    decode(pgid, p);
+    decode(map_epoch, p);
+    decode(min_epoch, p);
+    decode(cost, p);
+    decode(objects, p);
   }
 };
 

@@ -49,7 +49,7 @@ Initial Troubleshooting
 
   For those running on Emperor 0.72-rc1 and forward, you will be able to
   contact each monitor individually asking them for their status, regardless
-  of a quorum being formed. This an be achieved using ``ceph ping mon.ID``,
+  of a quorum being formed. This can be achieved using ``ceph ping mon.ID``,
   ID being the monitor's identifier. You should perform this for each monitor
   in the cluster. In section `Understanding mon_status`_ we will explain how
   to interpret the output of this command.
@@ -521,11 +521,11 @@ You have quorum
 
   Either inject the debug option into the monitor you want to debug::
 
-        ceph tell mon.FOO injectargs --debug_mon 10/10
+        ceph tell mon.FOO config set debug_mon 10/10
 
   or into all monitors at once::
 
-        ceph tell mon.* injectargs --debug_mon 10/10
+        ceph tell mon.* config set debug_mon 10/10
 
 No quourm
 

@@ -160,7 +160,7 @@ int ObjectPlayer::handle_fetch_complete(int r, const bufferlist &bl,
     }
 
     Entry entry;
-    ::decode(entry, iter);
+    decode(entry, iter);
     ldout(m_cct, 20) << ": " << entry << " decoded" << dendl;
 
     uint32_t entry_len = iter.get_off() - bl_off;
@@ -234,9 +234,12 @@ void ObjectPlayer::schedule_watch() {
   }
 
   ldout(m_cct, 20) << __func__ << ": " << m_oid << " scheduling watch" << dendl;
-  assert(m_watch_task == NULL);
-  m_watch_task = new C_WatchTask(this);
-  m_timer.add_event_after(m_watch_interval, m_watch_task);
+  assert(m_watch_task == nullptr);
+  m_watch_task = m_timer.add_event_after(
+    m_watch_interval,
+    new FunctionContext([this](int) {
+	handle_watch_task();
+      }));
 }
 
 bool ObjectPlayer::cancel_watch() {
@@ -299,10 +302,6 @@ void ObjectPlayer::C_Fetch::finish(int r) {
 
   object_player.reset();
   on_finish->complete(r);
-}
-
-void ObjectPlayer::C_WatchTask::finish(int r) {
-  object_player->handle_watch_task();
 }
 
 void ObjectPlayer::C_WatchFetch::finish(int r) {

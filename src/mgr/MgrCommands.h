@@ -107,6 +107,13 @@ COMMAND("osd test-reweight-by-pg " \
 	"dry run of reweight OSDs by PG distribution [overload-percentage-for-consideration, default 120]", \
 	"osd", "r", "cli,rest")
 
+COMMAND("osd safe-to-destroy name=ids,type=CephString,n=N",
+	"check whether osd(s) can be safely destroyed without reducing data durability",
+	"osd", "r", "cli,rest")
+COMMAND("osd ok-to-stop name=ids,type=CephString,n=N",
+	"check whether osd(s) can be safely stopped without reducing immediate"\
+	" data availability", "osd", "r", "cli,rest")
+
 COMMAND("osd scrub " \
 	"name=who,type=CephString", \
 	"initiate scrub on osd <who>, or use <all|any|*> to scrub all", \
@@ -124,3 +131,8 @@ COMMAND("service dump",
         "dump service map", "service", "r", "cli,rest")
 COMMAND("service status",
         "dump service state", "service", "r", "cli,rest")
+
+COMMAND("config set " \
+	"name=key,type=CephString name=value,type=CephString",
+	"Set a configuration option at runtime (not persistent)",
+	"mgr", "rw", "cli,rest")

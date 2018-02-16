@@ -23,6 +23,7 @@
 
 #include <infiniband/verbs.h>
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -57,7 +58,7 @@ class Port {
   int port_num;
   struct ibv_port_attr* port_attr;
   uint16_t lid;
-  int gid_idx;
+  int gid_idx = 0;
   union ibv_gid gid;
 
  public:
@@ -73,7 +74,7 @@ class Port {
 class Device {
   ibv_device *device;
   const char* name;
-  uint8_t  port_cnt;
+  uint8_t  port_cnt = 0;
  public:
   explicit Device(CephContext *c, ibv_device* d);
   ~Device() {
@@ -206,9 +207,9 @@ class Infiniband {
 
      public:
       ibv_mr* mr;
-      uint32_t lkey;
+      uint32_t lkey = 0;
       uint32_t bytes;
-      uint32_t bound;
+      uint32_t bound = 0;
       uint32_t offset;
       char* buffer; // TODO: remove buffer/refactor TX
       char  data[0];
@@ -233,7 +234,7 @@ class Infiniband {
 
       MemoryManager& manager;
       uint32_t buffer_size;
-      uint32_t num_chunk;
+      uint32_t num_chunk = 0;
       Mutex lock;
       std::vector<Chunk*> free_chunks;
       char *base = nullptr;
@@ -241,16 +242,30 @@ class Infiniband {
       Chunk* chunk_base = nullptr;
     };
 
-    class RxAllocator {
+    class MemPoolContext {
+      PerfCounters *perf_logger;
+
+     public:
+      MemoryManager *manager;
+      unsigned n_bufs_allocated;
+      // true if it is possible to alloc
+      // more memory for the pool
+      MemPoolContext(MemoryManager *m) :
+        perf_logger(nullptr),
+        manager(m),
+        n_bufs_allocated(0) {}
+      bool can_alloc(unsigned nbufs);
+      void update_stats(int val);
+      void set_stat_logger(PerfCounters *logger);
+    };
+
+    class PoolAllocator {
       struct mem_info {
         ibv_mr   *mr;
+        MemPoolContext *ctx;
         unsigned nbufs;
         Chunk    chunks[0];
       };
-      static MemoryManager *manager;
-      static unsigned n_bufs_allocated;
-      static unsigned max_bufs;
-      static PerfCounters *perf_logger;
      public:
       typedef std::size_t size_type;
       typedef std::ptrdiff_t difference_type;
@@ -258,16 +273,37 @@ class Infiniband {
       static char * malloc(const size_type bytes);
       static void free(char * const block);
 
-      static void set_memory_manager(MemoryManager *m) {
-        manager = m;
-      }
-      static void set_max_bufs(int n) {
-        max_bufs = n;
-      }
+      static MemPoolContext  *g_ctx;
+      static Mutex lock;
+    };
 
-      static void set_perf_logger(PerfCounters *logger) {
-        perf_logger = logger;
-        perf_logger->set(l_msgr_rdma_rx_bufs_total, n_bufs_allocated);
+    /**
+     * modify boost pool so that it is possible to
+     * have a thread safe 'context' when allocating/freeing
+     * the memory. It is needed to allow a different pool
+     * configurations and bookkeeping per CephContext and
+     * also to be able to use same allocator to deal with
+     * RX and TX pool.
+     * TODO: use boost pool to allocate TX chunks too
+     */
+    class mem_pool : public boost::pool<PoolAllocator> {
+     private:
+      MemPoolContext *ctx;
+      void *slow_malloc();
+
+     public:
+      explicit mem_pool(MemPoolContext *ctx, const size_type nrequested_size,
+          const size_type nnext_size = 32,
+          const size_type nmax_size = 0) :
+        pool(nrequested_size, nnext_size, nmax_size),
+        ctx(ctx) { }
+
+      void *malloc() {
+        if (!store().empty())
+          return (store().malloc)();
+        // need to alloc more memory...
+        // slow path code
+        return slow_malloc();
       }
     };
 
@@ -296,16 +332,20 @@ class Infiniband {
       rxbuf_pool.free(chunk);
     }
 
+    void set_rx_stat_logger(PerfCounters *logger) {
+      rxbuf_pool_ctx.set_stat_logger(logger);
+    }
+
     CephContext  *cct;
    private:
     // TODO: Cluster -> TxPool txbuf_pool
     // chunk layout fix
     //  
-    Cluster* send;// SEND
+    Cluster* send = nullptr;// SEND
     Device *device;
     ProtectionDomain *pd;
-    boost::pool<RxAllocator> rxbuf_pool;
-    bool  hp_enabled;
+    MemPoolContext rxbuf_pool_ctx;
+    mem_pool     rxbuf_pool;
 
     void* huge_pages_malloc(size_t size);
     void  huge_pages_free(void *ptr);
@@ -425,6 +465,9 @@ class Infiniband {
      * Return true if the queue pair is in an error state, false otherwise.
      */
     bool is_error() const;
+    void add_tx_wr(uint32_t amt) { tx_wr_inflight += amt; }
+    void dec_tx_wr(uint32_t amt) { tx_wr_inflight -= amt; }
+    uint32_t get_tx_wr() const { return tx_wr_inflight; }
     ibv_qp* get_qp() const { return qp; }
     Infiniband::CompletionQueue* get_tx_cq() const { return txcq; }
     Infiniband::CompletionQueue* get_rx_cq() const { return rxcq; }
@@ -447,6 +490,7 @@ class Infiniband {
     uint32_t     max_recv_wr;
     uint32_t     q_key;
     bool dead;
+    std::atomic<uint32_t> tx_wr_inflight = {0}; // counter for inflight Tx WQEs
   };
 
  public:
@@ -454,7 +498,8 @@ class Infiniband {
   typedef MemoryManager::Chunk Chunk;
   QueuePair* create_queue_pair(CephContext *c, CompletionQueue*, CompletionQueue*, ibv_qp_type type);
   ibv_srq* create_shared_receive_queue(uint32_t max_wr, uint32_t max_sge);
-  void  post_chunks_to_srq(int);
+  // post rx buffers to srq, return number of buffers actually posted
+  int  post_chunks_to_srq(int num);
   void post_chunk_to_pool(Chunk* chunk) {
     get_memory_manager()->release_rx_buffer(chunk);
   }

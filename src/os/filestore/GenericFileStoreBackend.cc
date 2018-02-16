@@ -331,7 +331,7 @@ int GenericFileStoreBackend::do_fiemap(int fd, off_t start, size_t len, struct f
   fiemap->fm_length = len + start % CEPH_PAGE_SIZE;
   fiemap->fm_flags = FIEMAP_FLAG_SYNC; /* flush extents to disk if needed */
 
-#if defined(DARWIN) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
   ret = -ENOTSUP;
   goto done_err;
 #else
@@ -355,7 +355,7 @@ int GenericFileStoreBackend::do_fiemap(int fd, off_t start, size_t len, struct f
   fiemap->fm_extent_count = fiemap->fm_mapped_extents;
   fiemap->fm_mapped_extents = 0;
 
-#if defined(DARWIN) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
   ret = -ENOTSUP;
   goto done_err;
 #else
@@ -397,7 +397,7 @@ int GenericFileStoreBackend::_crc_load_or_init(int fd, SloppyCRCMap *cm)
   bl.append(std::move(bp));
   bufferlist::iterator p = bl.begin();
   try {
-    ::decode(*cm, p);
+    decode(*cm, p);
   }
   catch (buffer::error &e) {
     r = -EIO;
@@ -410,7 +410,7 @@ int GenericFileStoreBackend::_crc_load_or_init(int fd, SloppyCRCMap *cm)
 int GenericFileStoreBackend::_crc_save(int fd, SloppyCRCMap *cm)
 {
   bufferlist bl;
-  ::encode(*cm, bl);
+  encode(*cm, bl);
   int r = chain_fsetxattr(fd, SLOPPY_CRC_XATTR, bl.c_str(), bl.length());
   if (r < 0)
     derr << __func__ << " got " << cpp_strerror(r) << dendl;

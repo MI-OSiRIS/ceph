@@ -52,11 +52,11 @@ Formatter::Formatter() { }
 
 Formatter::~Formatter() { }
 
-Formatter *Formatter::create(const std::string &type,
-			     const std::string& default_type,
-			     const std::string& fallback)
+Formatter *Formatter::create(std::string_view type,
+			     std::string_view default_type,
+			     std::string_view fallback)
 {
-  std::string mytype = type;
+  std::string mytype(type);
   if (mytype == "")
     mytype = default_type;
 
@@ -127,6 +127,8 @@ void JSONFormatter::flush(std::ostream& os)
 {
   finish_pending_string();
   os << m_ss.str();
+  if (m_line_break_enabled)
+    os << "\n";
   m_ss.clear();
   m_ss.str("");
 }
@@ -159,11 +161,11 @@ void JSONFormatter::print_comma(json_formatter_stack_entry_d& entry)
     m_ss << "    ";
 }
 
-void JSONFormatter::print_quoted_string(const std::string& s)
+void JSONFormatter::print_quoted_string(std::string_view s)
 {
-  int len = escape_json_attr_len(s.c_str(), s.size());
+  int len = escape_json_attr_len(s.data(), s.size());
   char escaped[len];
-  escape_json_attr(s.c_str(), s.size(), escaped);
+  escape_json_attr(s.data(), s.size(), escaped);
   m_ss << '\"' << escaped << '\"';
 }
 
@@ -270,7 +272,7 @@ void JSONFormatter::dump_float(const char *name, double d)
   m_ss << foo;
 }
 
-void JSONFormatter::dump_string(const char *name, const std::string& s)
+void JSONFormatter::dump_string(const char *name, std::string_view s)
 {
   print_name(name);
   print_quoted_string(s);
@@ -325,6 +327,8 @@ void XMLFormatter::flush(std::ostream& os)
   /* There is a small catch here. If the rest of the formatter had NO output,
    * we should NOT output a newline. This primarily triggers on HTTP redirects */
   if (m_pretty && !m_ss_str.empty())
+    os << "\n";
+  else if (m_line_break_enabled)
     os << "\n";
   m_ss.clear();
   m_ss.str("");
@@ -439,19 +443,19 @@ void XMLFormatter::dump_float(const char *name, double d)
     m_ss << "\n";
 }
 
-void XMLFormatter::dump_string(const char *name, const std::string& s)
+void XMLFormatter::dump_string(const char *name, std::string_view s)
 {
   std::string e(name);
   std::transform(e.begin(), e.end(), e.begin(),
       [this](char c) { return this->to_lower_underscore(c); });
 
   print_spaces();
-  m_ss << "<" << e << ">" << escape_xml_str(s.c_str()) << "</" << e << ">";
+  m_ss << "<" << e << ">" << escape_xml_str(s.data()) << "</" << e << ">";
   if (m_pretty)
     m_ss << "\n";
 }
 
-void XMLFormatter::dump_string_with_attrs(const char *name, const std::string& s, const FormatterAttrs& attrs)
+void XMLFormatter::dump_string_with_attrs(const char *name, std::string_view s, const FormatterAttrs& attrs)
 {
   std::string e(name);
   std::transform(e.begin(), e.end(), e.begin(),
@@ -460,7 +464,7 @@ void XMLFormatter::dump_string_with_attrs(const char *name, const std::string& s
   std::string attrs_str;
   get_attrs_str(&attrs, attrs_str);
   print_spaces();
-  m_ss << "<" << e << attrs_str << ">" << escape_xml_str(s.c_str()) << "</" << e << ">";
+  m_ss << "<" << e << attrs_str << ">" << escape_xml_str(s.data()) << "</" << e << ">";
   if (m_pretty)
     m_ss << "\n";
 }
@@ -560,11 +564,11 @@ void XMLFormatter::print_spaces()
   }
 }
 
-std::string XMLFormatter::escape_xml_str(const char *str)
+std::string XMLFormatter::escape_xml_str(std::string_view str)
 {
-  int len = escape_xml_attr_len(str);
+  size_t len = escape_xml_attr_len(str.data());
   std::vector<char> escaped(len, '\0');
-  escape_xml_attr(str, &escaped[0]);
+  escape_xml_attr(str.data(), &escaped[0]);
   return std::string(&escaped[0]);
 }
 
@@ -833,7 +837,7 @@ void TableFormatter::dump_float(const char *name, double d)
   m_ss.str("");
 }
 
-void TableFormatter::dump_string(const char *name, const std::string& s)
+void TableFormatter::dump_string(const char *name, std::string_view s)
 {
   finish_pending_string();
   size_t i = m_vec_index(name);
@@ -844,7 +848,7 @@ void TableFormatter::dump_string(const char *name, const std::string& s)
   m_ss.str("");
 }
 
-void TableFormatter::dump_string_with_attrs(const char *name, const std::string& s, const FormatterAttrs& attrs)
+void TableFormatter::dump_string_with_attrs(const char *name, std::string_view s, const FormatterAttrs& attrs)
 {
   finish_pending_string();
   size_t i = m_vec_index(name);

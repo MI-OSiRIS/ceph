@@ -141,7 +141,7 @@ int list_process_image(librados::Rados* rados, WorkerEntry* w, bool lflag, Forma
     }
   }
 
-  return r < 0 ? r : 0;
+  return 0;
 }
 
 int do_list(std::string &pool_name, bool lflag, int threads, Formatter *f) {
@@ -280,7 +280,8 @@ void get_arguments(po::options_description *positional,
   at::add_format_options(options);
 }
 
-int execute(const po::variables_map &vm) {
+int execute(const po::variables_map &vm,
+            const std::vector<std::string> &ceph_global_init_args) {
   size_t arg_index = 0;
   std::string pool_name = utils::get_pool_name(vm, &arg_index);
 

@@ -129,12 +129,6 @@ void Elector::defer(int who)
   m->mon_features = ceph::features::mon::get_supported();
   mon->collect_metadata(&m->metadata);
 
-  // This field is unused completely in luminous, but jewel uses it to
-  // determine whether we are a dumpling mon due to some crufty old
-  // code.  It only needs to see this buffer non-empty, so put
-  // something useless there.
-  m->sharing_bl = mon->get_local_commands_bl(mon->get_required_mon_features());
-
   mon->messenger->send_message(m, mon->monmap->get_inst(who));
   
   // set a timer
@@ -159,11 +153,11 @@ void Elector::reset_timer(double plus)
    * as far as we know, we may even be dead); so, just propose ourselves as the
    * Leader.
    */
-  expire_event = new C_MonContext(mon, [this](int) {
-      expire();
-    });
-  mon->timer.add_event_after(g_conf->mon_election_timeout + plus,
-			     expire_event);
+  expire_event = mon->timer.add_event_after(
+    g_conf->mon_election_timeout + plus,
+    new C_MonContext(mon, [this](int) {
+	expire();
+      }));
 }
 
 

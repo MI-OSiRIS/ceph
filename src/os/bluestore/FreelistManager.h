@@ -24,7 +24,8 @@ public:
 
   static void setup_merge_operators(KeyValueDB *db);
 
-  virtual int create(uint64_t size, KeyValueDB::Transaction txn) = 0;
+  virtual int create(uint64_t size, uint64_t granularity,
+		     KeyValueDB::Transaction txn) = 0;
 
   virtual int init() = 0;
   virtual void shutdown() = 0;
@@ -40,6 +41,10 @@ public:
   virtual void release(
     uint64_t offset, uint64_t length,
     KeyValueDB::Transaction txn) = 0;
+
+  virtual uint64_t get_alloc_units() const = 0;
+  virtual uint64_t get_alloc_size() const = 0;
+
 };
 
 

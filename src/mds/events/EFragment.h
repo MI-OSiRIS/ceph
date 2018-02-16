@@ -38,7 +38,7 @@ public:
 
   EFragment() : LogEvent(EVENT_FRAGMENT) { }
   EFragment(MDLog *mdlog, int o, dirfrag_t df, int b) :
-    LogEvent(EVENT_FRAGMENT), metablob(mdlog), 
+    LogEvent(EVENT_FRAGMENT),
     op(o), ino(df.ino), basefrag(df.frag), bits(b) { }
 
   void print(ostream& out) const override {
@@ -62,9 +62,10 @@ public:
   }
 
   void add_orig_frag(frag_t df, dirfrag_rollback *drb=NULL) {
+    using ceph::encode;
     orig_frags.push_back(df);
     if (drb)
-      ::encode(*drb, rollback);
+      encode(*drb, rollback);
   }
 
   EMetaBlob *get_metablob() override { return &metablob; }

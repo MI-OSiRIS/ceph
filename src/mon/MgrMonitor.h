@@ -43,7 +43,16 @@ class MgrMonitor: public PaxosService
    */
   bool promote_standby();
   void drop_active();
-  void drop_standby(uint64_t gid);
+
+  /**
+   * Remove this gid from the list of standbys.  By default,
+   * also remove metadata (i.e. forget the daemon entirely).
+   *
+   * Set `drop_meta` to false if you would like to keep
+   * the daemon's metadata, for example if you're dropping
+   * it as a standby before reinstating it as the active daemon.
+   */
+  void drop_standby(uint64_t gid, bool drop_meta=true);
 
   Context *digest_event = nullptr;
   void cancel_timer();
@@ -69,7 +78,10 @@ public:
 
   bool in_use() const { return map.epoch > 0; }
 
+  version_t get_trim_to() const override;
+
   void create_initial() override;
+  void get_store_prefixes(std::set<string>& s) const override;
   void update_from_paxos(bool *need_bootstrap) override;
   void create_pending() override;
   void encode_pending(MonitorDBStore::TransactionRef t) override;
@@ -92,9 +104,6 @@ public:
   void on_active() override;
   void on_restart() override;
 
-  void get_health(list<pair<health_status_t,string> >& summary,
-		  list<pair<health_status_t,string> > *detail,
-		  CephContext *cct) const override;
   void tick() override;
 
   void print_summary(Formatter *f, std::ostream *ss) const;
@@ -108,6 +117,11 @@ public:
   void count_metadata(const string& field, std::map<string,int> *out);
 
   friend class C_Updated;
+
+  // When did the mon last call into our tick() method?  Used for detecting
+  // when the mon was not updating us for some period (e.g. during slow
+  // election) to reset last_beacon timeouts
+  ceph::coarse_mono_clock::time_point last_tick;
 };
 
 #endif

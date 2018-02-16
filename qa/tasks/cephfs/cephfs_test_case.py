@@ -43,6 +43,7 @@ class CephFSTestCase(CephTestCase):
     # FIXME weird explicit naming
     mount_a = None
     mount_b = None
+    recovery_mount = None
 
     # Declarative test requirements: subclasses should override these to indicate
     # their special needs.  If not met, tests will be skipped.
@@ -54,6 +55,9 @@ class CephFSTestCase(CephTestCase):
 
     # Whether to create the default filesystem during setUp
     REQUIRE_FILESYSTEM = True
+
+    # requires REQUIRE_FILESYSTEM = True
+    REQUIRE_RECOVERY_FILESYSTEM = False
 
     LOAD_SETTINGS = []
 
@@ -105,12 +109,7 @@ class CephFSTestCase(CephTestCase):
         self.mds_cluster.mds_fail()
         self.mds_cluster.delete_all_filesystems()
         self.fs = None # is now invalid!
-
-        # In case the previous filesystem had filled up the RADOS cluster, wait for that
-        # flag to pass.
-        osd_mon_report_interval_max = int(self.mds_cluster.get_config("osd_mon_report_interval_max", service_type='osd'))
-        self.wait_until_true(lambda: not self.mds_cluster.is_full(),
-                             timeout=osd_mon_report_interval_max * 5)
+        self.recovery_fs = None
 
         # In case anything is in the OSD blacklist list, clear it out.  This is to avoid
         # the OSD map changing in the background (due to blacklist expiry) while tests run.
@@ -138,7 +137,7 @@ class CephFSTestCase(CephTestCase):
                 self.mds_cluster.mon_manager.raw_cluster_cmd("auth", "del", entry['entity'])
 
         if self.REQUIRE_FILESYSTEM:
-            self.fs = self.mds_cluster.newfs(True)
+            self.fs = self.mds_cluster.newfs(create=True)
             self.fs.mds_restart()
 
             # In case some test messed with auth caps, reset them
@@ -156,6 +155,20 @@ class CephFSTestCase(CephTestCase):
             for i in range(0, self.CLIENTS_REQUIRED):
                 self.mounts[i].mount()
                 self.mounts[i].wait_until_mounted()
+
+        if self.REQUIRE_RECOVERY_FILESYSTEM:
+            if not self.REQUIRE_FILESYSTEM:
+                raise case.SkipTest("Recovery filesystem requires a primary filesystem as well")
+            self.fs.mon_manager.raw_cluster_cmd('fs', 'flag', 'set',
+                                                'enable_multiple', 'true',
+                                                '--yes-i-really-mean-it')
+            self.recovery_fs = self.mds_cluster.newfs(name="recovery_fs", create=False)
+            self.recovery_fs.set_metadata_overlay(True)
+            self.recovery_fs.set_data_pool_name(self.fs.get_data_pool_name())
+            self.recovery_fs.create()
+            self.recovery_fs.getinfo(refresh=True)
+            self.recovery_fs.mds_restart()
+            self.recovery_fs.wait_for_daemons()
 
         # Load an config settings of interest
         for setting in self.LOAD_SETTINGS:
@@ -268,7 +281,7 @@ class CephFSTestCase(CephTestCase):
 
                 # Determine the PID of the crashed MDS by inspecting the MDSMap, it had
                 # to talk to the mons to get assigned a rank to reach the point of crashing
-                addr = self.mds_cluster.mon_manager.get_mds_status(daemon_id)['addr']
+                addr = self.mds_cluster.status().get_mds(daemon_id)['addr']
                 pid_str = addr.split("/")[1]
                 log.info("Determined crasher PID was {0}".format(pid_str))
 

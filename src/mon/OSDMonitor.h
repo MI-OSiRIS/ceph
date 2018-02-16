@@ -23,7 +23,6 @@
 
 #include <map>
 #include <set>
-using namespace std;
 
 #include "include/types.h"
 #include "common/simple_cache.hpp"
@@ -42,8 +41,6 @@ class MOSDMap;
 
 #include "erasure-code/ErasureCodeInterface.h"
 #include "mon/MonOpRequest.h"
-
-#define OSD_METADATA_PREFIX "osd_metadata"
 
 /// information about a particular peer's failure reports for one osd
 struct failure_reporter_t {
@@ -165,7 +162,7 @@ public:
   // svc
 public:  
   void create_initial() override;
-  void get_store_prefixes(std::set<string>& s) override;
+  void get_store_prefixes(std::set<string>& s) const override;
 
 private:
   void update_from_paxos(bool *need_bootstrap) override;
@@ -238,7 +235,7 @@ private:
   bool prepare_update(MonOpRequestRef op) override;
   bool should_propose(double &delay) override;
 
-  version_t get_trim_to() override;
+  version_t get_trim_to() const override;
 
   bool can_mark_down(int o);
   bool can_mark_up(int o);
@@ -346,6 +343,7 @@ private:
 				const string &erasure_code_profile,
 				unsigned *stripe_width,
 				ostream *ss);
+  int check_pg_num(int64_t pool, int pg_num, int size, ostream* ss);
   int prepare_new_pool(string& name, uint64_t auid,
 		       int crush_rule,
 		       const string &crush_rule_name,
@@ -357,8 +355,20 @@ private:
 		       ostream *ss);
   int prepare_new_pool(MonOpRequestRef op);
 
-  void update_pool_flags(int64_t pool_id, uint64_t flags);
+  void set_pool_flags(int64_t pool_id, uint64_t flags);
+  void clear_pool_flags(int64_t pool_id, uint64_t flags);
   bool update_pools_status();
+
+  string make_snap_epoch_key(int64_t pool, epoch_t epoch);
+  string make_snap_key(int64_t pool, snapid_t snap);
+  string make_snap_key_value(int64_t pool, snapid_t snap, snapid_t num,
+			     epoch_t epoch, bufferlist *v);
+  string make_snap_purged_key(int64_t pool, snapid_t snap);
+  string make_snap_purged_key_value(int64_t pool, snapid_t snap, snapid_t num,
+				    epoch_t epoch, bufferlist *v);
+  bool try_prune_purged_snaps();
+  int lookup_pruned_snap(int64_t pool, snapid_t snap,
+			 snapid_t *begin, snapid_t *end);
 
   bool prepare_set_flag(MonOpRequestRef op, int flag);
   bool prepare_unset_flag(MonOpRequestRef op, int flag);
@@ -453,9 +463,8 @@ protected:
   creating_pgs_t creating_pgs;
   mutable std::mutex creating_pgs_lock;
 
-  creating_pgs_t update_pending_pgs(const OSDMap::Incremental& inc);
-  void trim_creating_pgs(creating_pgs_t *creating_pgs,
-			 const ceph::unordered_map<pg_t,pg_stat_t>& pgm);
+  creating_pgs_t update_pending_pgs(const OSDMap::Incremental& inc,
+				    const OSDMap& nextmap);
   unsigned scan_for_creating_pgs(
     const mempool::osdmap::map<int64_t,pg_pool_t>& pools,
     const mempool::osdmap::set<int64_t>& removed_pools,
@@ -473,9 +482,6 @@ public:
 
   void tick() override;  // check state, take actions
 
-  void get_health(list<pair<health_status_t,string> >& summary,
-		  list<pair<health_status_t,string> > *detail,
-		  CephContext *cct) const override;
   bool preprocess_command(MonOpRequestRef op);
   bool prepare_command(MonOpRequestRef op);
   bool prepare_command_impl(MonOpRequestRef op, map<string,cmd_vartype>& cmdmap);
@@ -491,7 +497,9 @@ public:
       const uuid_d& uuid,
       int32_t* existing_id,
       stringstream& ss);
-  void do_osd_create(const int32_t id, const uuid_d& uuid, int32_t* new_id);
+  void do_osd_create(const int32_t id, const uuid_d& uuid,
+		     const string& device_class,
+		     int32_t* new_id);
   int prepare_command_osd_purge(int32_t id, stringstream& ss);
   int prepare_command_osd_destroy(int32_t id, stringstream& ss);
   int _prepare_command_osd_crush_remove(
@@ -530,6 +538,10 @@ public:
     send_incremental(op, start);
   }
 
+  void get_removed_snaps_range(
+    epoch_t start, epoch_t end,
+    mempool::osdmap::map<int64_t,OSDMap::snap_interval_set_t> *gap_removed_snaps);
+
   int get_version(version_t ver, bufferlist& bl) override;
   int get_version_full(version_t ver, bufferlist& bl) override;
 
@@ -542,7 +554,9 @@ public:
   void check_osdmap_sub(Subscription *sub);
   void check_pg_creates_sub(Subscription *sub);
 
-  void do_application_enable(int64_t pool_id, const std::string &app_name);
+  void do_application_enable(int64_t pool_id, const std::string &app_name,
+			     const std::string &app_key="",
+			     const std::string &app_value="");
 
   void add_flag(int flag) {
     if (!(osdmap.flags & flag)) {

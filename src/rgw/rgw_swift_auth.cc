@@ -14,7 +14,7 @@
 #include "common/ceph_crypto.h"
 #include "common/Clock.h"
 
-#include "auth/Crypto.h"
+#include "include/random.h"
 
 #include "rgw_client_io.h"
 #include "rgw_http_client.h"
@@ -203,13 +203,17 @@ class TempURLEngine::PrefixableSignatureHelper
   const boost::optional<const std::string&> prefix;
 
 public:
-  PrefixableSignatureHelper(const std::string& decoded_uri,
+  PrefixableSignatureHelper(const std::string& _decoded_uri,
 	                    const std::string& object_name,
                             const boost::optional<const std::string&> prefix)
-    : decoded_uri(decoded_uri),
+    : decoded_uri(_decoded_uri),
       object_name(object_name),
       prefix(prefix) {
-    /* Transform: v1/acct/cont/obj - > v1/acct/cont/ */
+    /* Transform: v1/acct/cont/obj - > v1/acct/cont/
+     *
+     * NOTE(rzarzynski): we really want to substr() on boost::string_view,
+     * not std::string. Otherwise we would end with no_obj_uri referencing
+     * a temporary. */
     no_obj_uri = \
       decoded_uri.substr(0, decoded_uri.length() - object_name.length());
   }
@@ -424,9 +428,10 @@ static int build_token(const string& swift_user,
                        const utime_t& expiration,
                        bufferlist& bl)
 {
-  ::encode(swift_user, bl);
-  ::encode(nonce, bl);
-  ::encode(expiration, bl);
+  using ceph::encode;
+  encode(swift_user, bl);
+  encode(nonce, bl);
+  encode(expiration, bl);
 
   bufferptr p(CEPH_CRYPTO_HMACSHA1_DIGESTSIZE);
 
@@ -451,11 +456,7 @@ static int build_token(const string& swift_user,
 static int encode_token(CephContext *cct, string& swift_user, string& key,
 			bufferlist& bl)
 {
-  uint64_t nonce;
-
-  int ret = get_random_bytes((char *)&nonce, sizeof(nonce));
-  if (ret < 0)
-    return ret;
+  const auto nonce = ceph::util::generate_random_number<uint64_t>();
 
   utime_t expiration = ceph_clock_now();
   expiration += cct->_conf->rgw_swift_token_expiration;
@@ -508,9 +509,10 @@ SignedTokenEngine::authenticate(const std::string& token,
   try {
     /*const*/ auto iter = tok_bl.begin();
 
-    ::decode(swift_user, iter);
-    ::decode(nonce, iter);
-    ::decode(expiration, iter);
+    using ceph::decode;
+    decode(swift_user, iter);
+    decode(nonce, iter);
+    decode(expiration, iter);
   } catch (buffer::error& err) {
     ldout(cct, 0) << "NOTICE: failed to decode token" << dendl;
     throw -EINVAL;

@@ -11,7 +11,6 @@
 
 #define dout_subsys ceph_subsys_rgw
 
-using namespace std;
 
 bool LCExpiration_S3::xml_end(const char * el) {
   LCDays_S3 *lc_days = static_cast<LCDays_S3 *>(find_first("Days"));
@@ -32,7 +31,12 @@ bool LCExpiration_S3::xml_end(const char * el) {
   } else {
     date = lc_date->get_data();
     //We need return xml error according to S3
-    if (boost::none == ceph::from_iso_8601(date)) {
+    boost::optional<ceph::real_time> expiration_date = ceph::from_iso_8601(date);
+    if (boost::none == expiration_date) {
+      return false;
+    }
+    struct timespec expiration_time = ceph::real_clock::to_timespec(*expiration_date);
+    if (expiration_time.tv_sec % (24*60*60) || expiration_time.tv_nsec) {
       return false;
     }
   }
@@ -60,12 +64,44 @@ bool LCMPExpiration_S3::xml_end(const char *el) {
 bool RGWLifecycleConfiguration_S3::xml_end(const char *el) {
   XMLObjIter iter = find("Rule");
   LCRule_S3 *rule = static_cast<LCRule_S3 *>(iter.get_next());
+  if (!rule)
+    return false;
   while (rule) {
     add_rule(rule);
     rule = static_cast<LCRule_S3 *>(iter.get_next());
   }
   return true;
 }
+
+bool LCFilter_S3::xml_end(const char* el) {
+
+  XMLObj *o = find_first("And");
+  bool single_cond = false;
+  int num_conditions = 0;
+  // If there is an AND condition, every tag is a child of and
+  // else we only support single conditions and return false if we see multiple
+
+  if (o == nullptr){
+    o = this;
+    single_cond = true;
+  }
+
+  RGWXMLDecoder::decode_xml("Prefix", prefix, o);
+  if (!prefix.empty())
+    num_conditions++;
+  auto tags_iter = o->find("Tag");
+  obj_tags.clear();
+  while (auto tag_xml =tags_iter.get_next()){
+    std::string _key,_val;
+    RGWXMLDecoder::decode_xml("Key", _key, tag_xml);
+    RGWXMLDecoder::decode_xml("Value", _val, tag_xml);
+    obj_tags.emplace_tag(std::move(_key), std::move(_val));
+    num_conditions++;
+  }
+
+  return !(single_cond && num_conditions > 1);
+}
+
 
 bool LCRule_S3::xml_end(const char *el) {
   LCID_S3 *lc_id;
@@ -74,21 +110,45 @@ bool LCRule_S3::xml_end(const char *el) {
   LCExpiration_S3 *lc_expiration;
   LCNoncurExpiration_S3 *lc_noncur_expiration;
   LCMPExpiration_S3 *lc_mp_expiration;
-
+  LCFilter_S3 *lc_filter;
   id.clear();
   prefix.clear();
   status.clear();
   dm_expiration = false;
 
-  lc_id = static_cast<LCID_S3 *>(find_first("ID"));
-  if (!lc_id)
-    return false;
-  id = lc_id->get_data();
+  // S3 generates a 48 bit random ID, maybe we could generate shorter IDs
+  static constexpr auto LC_ID_LENGTH = 48;
 
-  lc_prefix = static_cast<LCPrefix_S3 *>(find_first("Prefix"));
-  if (!lc_prefix)
-    return false;
-  prefix = lc_prefix->get_data();
+  lc_id = static_cast<LCID_S3 *>(find_first("ID"));
+  if (lc_id){
+    id = lc_id->get_data();
+  } else {
+    gen_rand_alphanumeric_lower(cct, &id, LC_ID_LENGTH);
+  }
+
+
+  lc_filter = static_cast<LCFilter_S3 *>(find_first("Filter"));
+
+  if (lc_filter){
+    filter = *lc_filter;
+  } else {
+    // Ideally the following code should be deprecated and we should return
+    // False here, The new S3 LC configuration xml spec. makes Filter mandatory
+    // and Prefix optional. However older clients including boto2 still generate
+    // xml according to the older spec, where Prefix existed outside of Filter
+    // and S3 itself seems to be sloppy on enforcing the mandatory Filter
+    // argument. A day will come when S3 enforces their own xml-spec, but it is
+    // not this day
+
+    lc_prefix = static_cast<LCPrefix_S3 *>(find_first("Prefix"));
+
+    if (!lc_prefix){
+      return false;
+    }
+
+    prefix = lc_prefix->get_data();
+  }
+
 
   lc_status = static_cast<LCStatus_S3 *>(find_first("Status"));
   if (!lc_status)
@@ -123,10 +183,15 @@ bool LCRule_S3::xml_end(const char *el) {
   return true;
 }
 
-void LCRule_S3::to_xml(CephContext *cct, ostream& out) {
+void LCRule_S3::to_xml(ostream& out) {
   out << "<Rule>" ;
   out << "<ID>" << id << "</ID>";
-  out << "<Prefix>" << prefix << "</Prefix>";
+  if (!filter.empty()) {
+    LCFilter_S3& lc_filter = static_cast<LCFilter_S3&>(filter);
+    lc_filter.to_xml(out);
+  } else {
+    out << "<Prefix>" << prefix << "</Prefix>";
+  }
   out << "<Status>" << status << "</Status>";
   if (!expiration.empty() || dm_expiration) {
     LCExpiration_S3 expir(expiration.get_days_str(), expiration.get_date(), dm_expiration);
@@ -159,6 +224,8 @@ int RGWLifecycleConfiguration_S3::rebuild(RGWRados *store, RGWLifecycleConfigura
   return ret;
 }
 
+
+
 void RGWLifecycleConfiguration_S3::dump_xml(Formatter *f) const
 {
 	f->open_object_section_in_ns("LifecycleConfiguration", XMLNS_AWS_S3);
@@ -177,11 +244,13 @@ XMLObj *RGWLCXMLParser_S3::alloc_obj(const char *el)
   if (strcmp(el, "LifecycleConfiguration") == 0) {
     obj = new RGWLifecycleConfiguration_S3(cct);
   } else if (strcmp(el, "Rule") == 0) {
-    obj = new LCRule_S3();
+    obj = new LCRule_S3(cct);
   } else if (strcmp(el, "ID") == 0) {
     obj = new LCID_S3();
   } else if (strcmp(el, "Prefix") == 0) {
     obj = new LCPrefix_S3();
+  } else if (strcmp(el, "Filter") == 0) {
+    obj = new LCFilter_S3();
   } else if (strcmp(el, "Status") == 0) {
     obj = new LCStatus_S3();
   } else if (strcmp(el, "Expiration") == 0) {

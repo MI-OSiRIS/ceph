@@ -117,7 +117,7 @@ bool PaxosService::dispatch(MonOpRequestRef op)
        * Callback class used to propose the pending value once the proposal_timer
        * fires up.
        */
-    proposal_timer = new C_MonContext(mon, [this](int r) {
+    auto do_propose = new C_MonContext(mon, [this](int r) {
         proposal_timer = 0;
         if (r >= 0) {
           propose_pending();
@@ -127,9 +127,9 @@ bool PaxosService::dispatch(MonOpRequestRef op)
           assert(0 == "bad return value for proposal_timer");
         }
     });
-    dout(10) << " setting proposal_timer " << proposal_timer
+    dout(10) << " setting proposal_timer " << do_propose
              << " with delay of " << delay << dendl;
-    mon->timer.add_event_after(delay, proposal_timer);
+    proposal_timer = mon->timer.add_event_after(delay, do_propose);
   } else {
     dout(10) << " proposal_timer already set" << dendl;
   }
@@ -335,9 +335,7 @@ void PaxosService::_active()
       return;
     }
   } else {
-    if (!mon->is_leader()) {
-      dout(7) << __func__ << " we are not the leader, hence we propose nothing!" << dendl;
-    }
+    dout(7) << __func__ << " we are not the leader, hence we propose nothing!" << dendl;
   }
 
   // wake up anyone who came in while we were proposing.  note that
@@ -399,6 +397,7 @@ void PaxosService::maybe_trim()
   MonitorDBStore::TransactionRef t = paxos->get_pending_transaction();
   trim(t, get_first_committed(), trim_to);
   put_first_committed(t, trim_to);
+  cached_first_committed = trim_to;
 
   // let the service add any extra stuff
   encode_trim_extra(t, trim_to);
@@ -437,6 +436,6 @@ void PaxosService::load_health()
   mon->store->get("health", service_name, bl);
   if (bl.length()) {
     auto p = bl.begin();
-    ::decode(health_checks, p);
+    decode(health_checks, p);
   }
 }

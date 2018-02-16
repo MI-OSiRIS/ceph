@@ -26,7 +26,6 @@
 #include "common/debug.h"
 #include "common/blkdev.h"
 #include "common/align.h"
-#include "common/blkdev.h"
 
 #define dout_context cct
 #define dout_subsys ceph_subsys_bdev
@@ -34,14 +33,12 @@
 #define dout_prefix *_dout << "bdev(" << this << " " << path << ") "
 
 KernelDevice::KernelDevice(CephContext* cct, aio_callback_t cb, void *cbpriv)
-  : BlockDevice(cct),
+  : BlockDevice(cct, cb, cbpriv),
     fd_direct(-1),
     fd_buffered(-1),
     fs(NULL), aio(false), dio(false),
     debug_lock("KernelDevice::debug_lock"),
     aio_queue(cct->_conf->bdev_aio_max_queue_depth),
-    aio_callback(cb),
-    aio_callback_priv(cbpriv),
     aio_stop(false),
     aio_thread(this),
     injecting_crash(0)
@@ -140,6 +137,7 @@ int KernelDevice::open(const string& p)
     } else {
       dout(20) << __func__ << " devname " << devname << dendl;
       rotational = block_device_is_rotational(devname);
+      this->devname = devname;
     }
   }
 
@@ -173,6 +171,18 @@ int KernelDevice::open(const string& p)
   return r;
 }
 
+int KernelDevice::get_devices(std::set<std::string> *ls)
+{
+  if (devname.empty()) {
+    return 0;
+  }
+  ls->insert(devname);
+  if (devname.find("dm-") == 0) {
+    get_dm_parents(devname, ls);
+  }
+  return 0;
+}
+
 void KernelDevice::close()
 {
   dout(1) << __func__ << dendl;
@@ -200,7 +210,7 @@ static string get_dev_property(const char *dev, const char *property)
   return val;
 }
 
-int KernelDevice::collect_metadata(string prefix, map<string,string> *pm) const
+int KernelDevice::collect_metadata(const string& prefix, map<string,string> *pm) const
 {
   (*pm)[prefix + "rotational"] = stringify((int)(bool)rotational);
   (*pm)[prefix + "size"] = stringify(get_size());
@@ -344,6 +354,7 @@ void KernelDevice::_aio_thread()
 					 aio, max);
     if (r < 0) {
       derr << __func__ << " got " << cpp_strerror(r) << dendl;
+      assert(0 == "got unexpected error from io_getevents");
     }
     if (r > 0) {
       dout(30) << __func__ << " got " << r << " completed aios" << dendl;
@@ -364,11 +375,23 @@ void KernelDevice::_aio_thread()
 	io_since_flush.store(true);
 
 	int r = aio[i]->get_return_value();
-	dout(10) << __func__ << " finished aio " << aio[i] << " r " << r
-		 << " ioc " << ioc
-		 << " with " << (ioc->num_running.load() - 1)
-		 << " aios left" << dendl;
-	assert(r >= 0);
+        if (r < 0) {
+          derr << __func__ << " got " << cpp_strerror(r) << dendl;
+          if (ioc->allow_eio && r == -EIO) {
+            ioc->set_return_value(r);
+          } else {
+            assert(0 == "got unexpected error from io_getevents");
+          }
+        } else if (aio[i]->length != (uint64_t)r) {
+          derr << "aio to " << aio[i]->offset << "~" << aio[i]->length
+               << " but returned: " << r << dendl;
+          assert(0 == "unexpected aio error");
+        }
+
+        dout(10) << __func__ << " finished aio " << aio[i] << " r " << r
+                 << " ioc " << ioc
+                 << " with " << (ioc->num_running.load() - 1)
+                 << " aios left" << dendl;
 
 	// NOTE: once num_running and we either call the callback or
 	// call aio_wake we cannot touch ioc or aio[] as the caller
@@ -499,10 +522,7 @@ void KernelDevice::aio_submit(IOContext *ioc)
   if (cct->_conf->bdev_debug_aio) {
     list<aio_t>::iterator p = ioc->running_aios.begin();
     while (p != e) {
-      for (auto& io : p->iov)
-	dout(30) << __func__ << "   iov " << (void*)io.iov_base
-		 << " len " << io.iov_len << dendl;
-
+      dout(30) << __func__ << " " << *p << dendl;
       std::lock_guard<std::mutex> l(debug_queue_lock);
       debug_aio_link(*p++);
     }
@@ -511,7 +531,7 @@ void KernelDevice::aio_submit(IOContext *ioc)
   void *priv = static_cast<void*>(ioc);
   int r, retries = 0;
   r = aio_queue.submit_batch(ioc->running_aios.begin(), e, 
-			     ioc->num_running.load(), priv, &retries);
+			     pending, priv, &retries);
   
   if (retries)
     derr << __func__ << " retries " << retries << dendl;
@@ -567,14 +587,10 @@ int KernelDevice::write(
   dout(20) << __func__ << " 0x" << std::hex << off << "~" << len << std::dec
 	   << (buffered ? " (buffered)" : " (direct)")
 	   << dendl;
-  assert(off % block_size == 0);
-  assert(len % block_size == 0);
-  assert(len > 0);
-  assert(off < size);
-  assert(off + len <= size);
+  assert(is_valid_io(off, len));
 
   if ((!buffered || bl.get_num_buffers() >= IOV_MAX) &&
-      bl.rebuild_aligned_size_and_memory(block_size, block_size)) {
+      bl.rebuild_aligned_size_and_memory(block_size, block_size, IOV_MAX)) {
     dout(20) << __func__ << " rebuilding buffer to be aligned" << dendl;
   }
   dout(40) << "data: ";
@@ -601,7 +617,7 @@ int KernelDevice::aio_write(
   assert(off + len <= size);
 
   if ((!buffered || bl.get_num_buffers() >= IOV_MAX) &&
-      bl.rebuild_aligned_size_and_memory(block_size, block_size)) {
+      bl.rebuild_aligned_size_and_memory(block_size, block_size, IOV_MAX)) {
     dout(20) << __func__ << " rebuilding buffer to be aligned" << dendl;
   }
   dout(40) << "data: ";
@@ -626,10 +642,7 @@ int KernelDevice::aio_write(
       ++injecting_crash;
     } else {
       bl.prepare_iov(&aio.iov);
-      for (unsigned i=0; i<aio.iov.size(); ++i) {
-	dout(30) << "aio " << i << " " << aio.iov[i].iov_base
-		 << " " << aio.iov[i].iov_len << dendl;
-      }
+      dout(30) << aio << dendl;
       aio.bl.claim_append(bl);
       aio.pwritev(off, len);
     }
@@ -653,11 +666,7 @@ int KernelDevice::read(uint64_t off, uint64_t len, bufferlist *pbl,
   dout(5) << __func__ << " 0x" << std::hex << off << "~" << len << std::dec
 	  << (buffered ? " (buffered)" : " (direct)")
 	  << dendl;
-  assert(off % block_size == 0);
-  assert(len % block_size == 0);
-  assert(len > 0);
-  assert(off < size);
-  assert(off + len <= size);
+  assert(is_valid_io(off, len));
 
   _aio_log_start(ioc, off, len);
 
@@ -697,10 +706,7 @@ int KernelDevice::aio_read(
     ++ioc->num_pending;
     aio_t& aio = ioc->pending_aios.back();
     aio.pread(off, len);
-    for (unsigned i=0; i<aio.iov.size(); ++i) {
-      dout(30) << "aio " << i << " " << aio.iov[i].iov_base
-	       << " " << aio.iov[i].iov_len << dendl;
-    }
+    dout(30) << aio << dendl;
     pbl->append(aio.bl);
     dout(5) << __func__ << " 0x" << std::hex << off << "~" << len
 	    << std::dec << " aio " << &aio << dendl;

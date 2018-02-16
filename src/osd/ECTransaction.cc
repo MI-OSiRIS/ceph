@@ -99,7 +99,6 @@ void ECTransaction::generate_transactions(
   WritePlan &plan,
   ErasureCodeInterfaceRef &ecimpl,
   pg_t pgid,
-  bool legacy_log_entries,
   const ECUtil::stripe_info_t &sinfo,
   const map<hobject_t,extent_map> &partial_extents,
   vector<pg_log_entry_t> &entries,
@@ -167,7 +166,7 @@ void ECTransaction::generate_transactions(
 	  entry->is_modify() &&
 	  op.updated_snaps) {
 	bufferlist bl(op.updated_snaps->second.size() * 8 + 8);
-	::encode(op.updated_snaps->second, bl);
+	encode(op.updated_snaps->second, bl);
 	entry->snaps.swap(bl);
 	entry->snaps.reassign_to_mempool(mempool::mempool_osd_pglog);
       }
@@ -193,7 +192,7 @@ void ECTransaction::generate_transactions(
       map<string, boost::optional<bufferlist> > xattr_rollback;
       assert(hinfo);
       bufferlist old_hinfo;
-      ::encode(*hinfo, old_hinfo);
+      encode(*hinfo, old_hinfo);
       xattr_rollback[ECUtil::get_hinfo_key()] = old_hinfo;
       
       if (op.is_none() && op.truncate && op.truncate->first == 0) {
@@ -645,7 +644,7 @@ void ECTransaction::generate_transactions(
 
       if (!op.is_delete()) {
 	bufferlist hbuf;
-	::encode(*hinfo, hbuf);
+	encode(*hinfo, hbuf);
 	for (auto &&i : *transactions) {
 	  i.second.setattr(
 	    coll_t(spg_t(pgid, i.first)),

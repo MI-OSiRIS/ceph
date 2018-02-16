@@ -22,13 +22,13 @@
 class MStatfs : public PaxosServiceMessage {
 
   static const int HEAD_VERSION = 2;
-  static const int COMPAT_VERSION = 0;
+  static const int COMPAT_VERSION = 1;
 
 public:
   uuid_d fsid;
   boost::optional<int64_t> data_pool;
 
-  MStatfs() : PaxosServiceMessage(CEPH_MSG_STATFS, 0, HEAD_VERSION) {}
+  MStatfs() : PaxosServiceMessage(CEPH_MSG_STATFS, 0, HEAD_VERSION, COMPAT_VERSION) {}
   MStatfs(const uuid_d& f, ceph_tid_t t, boost::optional<int64_t> _data_pool,
 	      version_t v) : PaxosServiceMessage(CEPH_MSG_STATFS, v,
                                             HEAD_VERSION, COMPAT_VERSION),
@@ -47,16 +47,17 @@ public:
   }
 
   void encode_payload(uint64_t features) override {
+    using ceph::encode;
     paxos_encode();
-    ::encode(fsid, payload);
-    ::encode(data_pool, payload);
+    encode(fsid, payload);
+    encode(data_pool, payload);
   }
   void decode_payload() override {
     bufferlist::iterator p = payload.begin();
     paxos_decode(p);
-    ::decode(fsid, p);
+    decode(fsid, p);
     if (header.version >= 2) {
-      ::decode(data_pool, p);
+      decode(data_pool, p);
     } else {
       data_pool = boost::optional<int64_t> ();
     }

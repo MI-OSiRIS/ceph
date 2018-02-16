@@ -39,20 +39,21 @@ namespace CrushTreeDumper {
 
 WRITE_RAW_ENCODER(crush_rule_mask)   // it's all u8's
 
-inline static void encode(const crush_rule_step &s, bufferlist &bl)
+inline void encode(const crush_rule_step &s, bufferlist &bl)
 {
-  ::encode(s.op, bl);
-  ::encode(s.arg1, bl);
-  ::encode(s.arg2, bl);
+  using ceph::encode;
+  encode(s.op, bl);
+  encode(s.arg1, bl);
+  encode(s.arg2, bl);
 }
-inline static void decode(crush_rule_step &s, bufferlist::iterator &p)
+inline void decode(crush_rule_step &s, bufferlist::iterator &p)
 {
-  ::decode(s.op, p);
-  ::decode(s.arg1, p);
-  ::decode(s.arg2, p);
+  using ceph::decode;
+  decode(s.op, p);
+  decode(s.arg1, p);
+  decode(s.arg2, p);
 }
 
-using namespace std;
 class CrushWrapper {
 public:
   // magic value used by OSDMap for a "default" fallback choose_args, used if
@@ -120,14 +121,25 @@ public:
     set_tunables_default();
   }
 
-  /// true if any rule has a ruleset != the rule id
-  bool has_legacy_rulesets() const;
+  /**
+   * true if any rule has a rule id != its position in the array
+   *
+   * These indicate "ruleset" IDs that were created by older versions
+   * of Ceph.  They are cleaned up in renumber_rules so that eventually
+   * we can remove the code for handling them.
+   */
+  bool has_legacy_rule_ids() const;
 
-  /// fix rules whose ruleid != ruleset
-  int renumber_rules_by_ruleset();
-
-  /// true if any ruleset has more than 1 rule
-  bool has_multirule_rulesets() const;
+  /**
+   * fix rules whose ruleid != ruleset
+   *
+   * These rules were created in older versions of Ceph.  The concept
+   * of a ruleset no longer exists.
+   *
+   * Return a map of old ID -> new ID.  Caller must update OSDMap
+   * to use new IDs.
+   */
+  std::map<int, int> renumber_rules();
 
   /// true if any buckets that aren't straw2
   bool has_non_straw2_buckets() const;
@@ -539,6 +551,9 @@ public:
 		    ostream *ss);
 
   // rule names
+  int rename_rule(const string& srcname,
+                  const string& dstname,
+                  ostream *ss);
   bool rule_exists(string name) const {
     build_rmaps();
     return rule_name_rmap.count(name);
@@ -571,25 +586,25 @@ public:
    *
    * Note that these may not be parentless roots.
    */
-  void find_takes(set<int>& roots) const;
+  void find_takes(set<int> *roots) const;
 
   /**
    * find tree roots
    *
    * These are parentless nodes in the map.
    */
-  void find_roots(set<int>& roots) const;
+  void find_roots(set<int> *roots) const;
 
 
   /**
    * find tree roots that contain shadow (device class) items only
    */
-  void find_shadow_roots(set<int>& roots) const {
+  void find_shadow_roots(set<int> *roots) const {
     set<int> all;
-    find_roots(all);
+    find_roots(&all);
     for (auto& p: all) {
       if (is_shadow_item(p)) {
-        roots.insert(p);
+        roots->insert(p);
       }
     }
   }
@@ -600,12 +615,12 @@ public:
    * These are parentless nodes in the map that are not shadow
    * items for device classes.
    */
-  void find_nonshadow_roots(set<int>& roots) const {
+  void find_nonshadow_roots(set<int> *roots) const {
     set<int> all;
-    find_roots(all);
+    find_roots(&all);
     for (auto& p: all) {
       if (!is_shadow_item(p)) {
-        roots.insert(p);
+        roots->insert(p);
       }
     }
   }
@@ -627,6 +642,7 @@ private:
    * @return true if present
    */
   bool _search_item_exists(int i) const;
+  bool is_parent_of(int child, int p) const;
 public:
 
   /**
@@ -661,7 +677,7 @@ public:
    *
    * FIXME: ambiguous for items that occur multiple times in the map
    */
-  pair<string,string> get_immediate_parent(int id, int *ret = NULL);
+  pair<string,string> get_immediate_parent(int id, int *ret = NULL) const;
 
   int get_immediate_parent_id(int id, int *parent) const;
 
@@ -680,7 +696,7 @@ public:
    * returns the location in the form of (type=foo) where type is a type of bucket
    * specified in the CRUSH map and foo is a name specified in the CRUSH map
    */
-  map<string, string> get_full_location(int id);
+  map<string, string> get_full_location(int id) const;
 
   /*
    * identical to get_full_location(int id) although it returns the type/name
@@ -688,7 +704,7 @@ public:
    *
    * returns -ENOENT if id is not found.
    */
-  int get_full_location_ordered(int id, vector<pair<string, string> >& path);
+  int get_full_location_ordered(int id, vector<pair<string, string> >& path) const;
 
   /*
    * identical to get_full_location_ordered(int id, vector<pair<string, string> >& path),
@@ -697,13 +713,13 @@ public:
    *
    * returns the location in descending hierarchy as a string.
    */
-  string get_full_location_ordered_string(int id);
+  string get_full_location_ordered_string(int id) const;
 
   /**
    * returns (type_id, type) of all parent buckets between id and
    * default, can be used to check for anomolous CRUSH maps
    */
-  map<int, string> get_parent_hierarchy(int id);
+  map<int, string> get_parent_hierarchy(int id) const;
 
   /**
    * enumerate immediate children of given node
@@ -711,7 +727,7 @@ public:
    * @param id parent bucket or device id
    * @return number of items, or error
    */
-  int get_children(int id, list<int> *children);
+  int get_children(int id, list<int> *children) const;
 
   /**
     * enumerate leaves(devices) of given node
@@ -719,9 +735,12 @@ public:
     * @param name parent bucket name
     * @return 0 on success or a negative errno on error.
     */
-  int get_leaves(const string &name, set<int> *leaves);
-  int _get_leaves(int id, list<int> *leaves); // worker
+  int get_leaves(const string &name, set<int> *leaves) const;
 
+private:
+  int _get_leaves(int id, list<int> *leaves) const; // worker
+
+public:
   /**
    * insert an item into the map at a specific position
    *
@@ -834,10 +853,9 @@ public:
    * when a bucket is in use.
    *
    * @param item id to remove
-   * @param unused true if only unused items should be removed
    * @return 0 on success, negative on error
    */
-  int remove_root(int item, bool unused);
+  int remove_root(int item);
 
   /**
    * remove all instances of an item nested beneath a certain point from the map
@@ -866,7 +884,7 @@ public:
    * @param loc a set of key=value pairs describing a location in the hierarchy
    */
   int get_common_ancestor_distance(CephContext *cct, int id,
-				   const std::multimap<string,string>& loc);
+				   const std::multimap<string,string>& loc) const;
 
   /**
    * parse a set of key/value pairs out of a string vector
@@ -971,6 +989,17 @@ public:
       return true;
     return false;
   }
+  bool rule_has_take(unsigned ruleno, int take) const {
+    if (!crush) return false;
+    crush_rule *rule = get_rule(ruleno);
+    for (unsigned i = 0; i < rule->len; ++i) {
+      if (rule->steps[i].op == CRUSH_RULE_TAKE &&
+	  rule->steps[i].arg1 == take) {
+	return true;
+      }
+    }
+    return false;
+  }
   int get_rule_len(unsigned ruleno) const {
     crush_rule *r = get_rule(ruleno);
     if (IS_ERR(r)) return PTR_ERR(r);
@@ -1012,6 +1041,12 @@ public:
     return s->arg2;
   }
 
+private:
+  float _get_take_weight_osd_map(int root, map<int,float> *pmap) const;
+  void _normalize_weight_map(float sum, const map<int,float>& m,
+			     map<int,float> *pmap) const;
+
+public:
   /**
    * calculate a map of osds to weights for a given rule
    *
@@ -1022,7 +1057,19 @@ public:
    * @param pmap [out] map of osd to weight
    * @return 0 for success, or negative error code
    */
-  int get_rule_weight_osd_map(unsigned ruleno, map<int,float> *pmap);
+  int get_rule_weight_osd_map(unsigned ruleno, map<int,float> *pmap) const;
+
+  /**
+   * calculate a map of osds to weights for a given starting root
+   *
+   * Generate a map of which OSDs get how much relative weight for a
+   * given starting root
+   *
+   * @param root node
+   * @param pmap [out] map of osd to weight
+   * @return 0 for success, or negative error code
+   */
+  int get_take_weight_osd_map(int root, map<int,float> *pmap) const;
 
   /* modifiers */
 
@@ -1204,8 +1251,13 @@ public:
   void finalize() {
     assert(crush);
     crush_finalize(crush);
-    have_uniform_rules = !has_legacy_rulesets();
+    if (!name_map.empty() &&
+	name_map.rbegin()->first >= crush->max_devices) {
+      crush->max_devices = name_map.rbegin()->first + 1;
+    }
+    have_uniform_rules = !has_legacy_rule_ids();
   }
+  int bucket_set_alg(int id, int alg);
 
   int update_device_class(int id, const string& class_name, const string& name, ostream *ss);
   int remove_device_class(CephContext *cct, int id, ostream *ss);
@@ -1213,15 +1265,18 @@ public:
     int original, int device_class,
     const std::map<int32_t, map<int32_t, int32_t>>& old_class_bucket,
     const std::set<int32_t>& used_ids,
-    int *clone);
+    int *clone,
+    map<int,map<int,vector<int>>> *cmap_item_weight);
   int rename_class(const string& srcname, const string& dstname);
   int populate_classes(
     const std::map<int32_t, map<int32_t, int32_t>>& old_class_bucket);
+  int get_rules_by_class(const string &class_name, set<int> *rules);
+  int get_rules_by_osd(int osd, set<int> *rules);
   bool _class_is_dead(int class_id);
   void cleanup_dead_classes();
   int rebuild_roots_with_classes();
   /* remove unused roots generated for class devices */
-  int trim_roots_with_class(bool unused);
+  int trim_roots_with_class();
 
   void start_choose_profile() {
     free(crush->choose_tries);
@@ -1254,14 +1309,15 @@ public:
 
   int find_rule(int ruleset, int type, int size) const {
     if (!crush) return -1;
-    if (!have_uniform_rules) {
-      return crush_find_rule(crush, ruleset, type, size);
-    } else {
-      if (ruleset < (int)crush->max_rules &&
-	  crush->rules[ruleset])
-	return ruleset;
-      return -1;
+    if (have_uniform_rules &&
+	ruleset < (int)crush->max_rules &&
+	crush->rules[ruleset] &&
+	crush->rules[ruleset]->mask.type == type &&
+	crush->rules[ruleset]->mask.min_size <= size &&
+	crush->rules[ruleset]->mask.max_size >= size) {
+      return ruleset;
     }
+    return crush_find_rule(crush, ruleset, type, size);
   }
 
   bool ruleset_exists(const int ruleset) const {
@@ -1277,7 +1333,7 @@ public:
   /**
    * Return the lowest numbered ruleset of type `type`
    *
-   * @returns a ruleset ID, or -1 if no matching rulesets found.
+   * @returns a ruleset ID, or -1 if no matching rules found.
    */
   int find_first_ruleset(int type) const {
     int result = -1;
@@ -1339,9 +1395,9 @@ public:
     free(arg_map.args);
   }
 
-  void create_choose_args(int64_t id, int positions) {
+  bool create_choose_args(int64_t id, int positions) {
     if (choose_args.count(id))
-      return;
+      return false;
     assert(positions);
     auto &cmap = choose_args[id];
     cmap.args = (crush_choose_arg*)calloc(sizeof(crush_choose_arg),
@@ -1370,6 +1426,7 @@ public:
 	carg.weight_set_size = 0;
       }
     }
+    return true;
   }
 
   void rm_choose_args(int64_t id) {
@@ -1407,7 +1464,7 @@ public:
     ostream *ss) {
     vector<int> weight(weightf.size());
     for (unsigned i = 0; i < weightf.size(); ++i) {
-      weight[i] = (int)(weightf[i] * (float)0x10000);
+      weight[i] = (int)(weightf[i] * (double)0x10000);
     }
     return choose_args_adjust_item_weight(cct, cmap, id, weight, ss);
   }

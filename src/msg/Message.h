@@ -68,8 +68,9 @@
 #define MSG_OSD_MARK_ME_DOWN 74
 #define MSG_OSD_FULL         75
 
-#define MSG_OSD_SUBOP        76
-#define MSG_OSD_SUBOPREPLY   77
+// removed right after luminous
+//#define MSG_OSD_SUBOP        76
+//#define MSG_OSD_SUBOPREPLY   77
 
 #define MSG_OSD_PGTEMP       78
 
@@ -171,7 +172,7 @@
 
 // *** generic ***
 #define MSG_TIMECHECK             0x600
-#define MSG_MON_HEALTH            0x601
+//#define MSG_MON_HEALTH            0x601  // remove post-luminous
 
 // *** Message::encode() crcflags bits ***
 #define MSG_CRC_DATA           (1 << 0)

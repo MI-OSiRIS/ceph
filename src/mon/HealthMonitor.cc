@@ -15,17 +15,14 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <sstream>
-#include <boost/regex.hpp>
+#include <regex>
 
 #include "include/assert.h"
 #include "include/stringify.h"
 
 #include "mon/Monitor.h"
-#include "mon/HealthService.h"
 #include "mon/HealthMonitor.h"
-#include "mon/DataHealthService.h"
 
-#include "messages/MMonHealth.h"
 #include "messages/MMonHealthChecks.h"
 
 #include "common/Formatter.h"
@@ -63,7 +60,7 @@ void HealthMonitor::update_from_paxos(bool *need_bootstrap)
   mon->store->get(service_name, "quorum", qbl);
   if (qbl.length()) {
     auto p = qbl.begin();
-    ::decode(quorum_checks, p);
+    decode(quorum_checks, p);
   } else {
     quorum_checks.clear();
   }
@@ -72,7 +69,7 @@ void HealthMonitor::update_from_paxos(bool *need_bootstrap)
   mon->store->get(service_name, "leader", lbl);
   if (lbl.length()) {
     auto p = lbl.begin();
-    ::decode(leader_checks, p);
+    decode(leader_checks, p);
   } else {
     leader_checks.clear();
   }
@@ -104,10 +101,10 @@ void HealthMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   put_last_committed(t, version);
 
   bufferlist qbl;
-  ::encode(quorum_checks, qbl);
+  encode(quorum_checks, qbl);
   t->put(service_name, "quorum", qbl);
   bufferlist lbl;
-  ::encode(leader_checks, lbl);
+  encode(leader_checks, lbl);
   t->put(service_name, "leader", lbl);
 
   health_check_map_t pending_health;
@@ -121,20 +118,20 @@ void HealthMonitor::encode_pending(MonitorDBStore::TransactionRef t)
     pending_health.merge(p.second);
   }
   for (auto &p : pending_health.checks) {
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%hasorhave%"),
+      std::regex("%hasorhave%"),
       names[p.first].size() > 1 ? "have" : "has");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%names%"), stringify(names[p.first]));
-    p.second.summary = boost::regex_replace(
+      std::regex("%names%"), stringify(names[p.first]));
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%plurals%"),
+      std::regex("%plurals%"),
       names[p.first].size() > 1 ? "s" : "");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%isorare%"),
+      std::regex("%isorare%"),
       names[p.first].size() > 1 ? "are" : "is");
   }
 
@@ -142,7 +139,7 @@ void HealthMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   encode_health(pending_health, t);
 }
 
-version_t HealthMonitor::get_trim_to()
+version_t HealthMonitor::get_trim_to() const
 {
   // we don't actually need *any* old states, but keep a few.
   if (version > 5) {
@@ -162,17 +159,6 @@ bool HealthMonitor::prepare_update(MonOpRequestRef op)
   dout(7) << "prepare_update " << *m
 	  << " from " << m->get_orig_source_inst() << dendl;
   switch (m->get_type()) {
-  case MSG_MON_HEALTH:
-    {
-      MMonHealth *hm = static_cast<MMonHealth*>(op->get_req());
-      int service_type = hm->get_service_type();
-      if (services.count(service_type) == 0) {
-	dout(1) << __func__ << " service type " << service_type
-		<< " not registered -- drop message!" << dendl;
-	return false;
-      }
-      return services[service_type]->service_dispatch(op);
-    }
   case MSG_MON_HEALTH_CHECKS:
     return prepare_health_checks(op);
   default:

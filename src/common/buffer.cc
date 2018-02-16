@@ -24,13 +24,13 @@
 #include "common/environment.h"
 #include "common/errno.h"
 #include "common/safe_io.h"
-#include "common/simple_spin.h"
 #include "common/strtol.h"
 #include "common/likely.h"
 #include "common/valgrind.h"
 #include "common/deleter.h"
 #include "common/RWLock.h"
 #include "include/types.h"
+#include "include/spinlock.h"
 #include "include/scope_guard.h"
 
 #if defined(HAVE_XIO)
@@ -39,13 +39,12 @@
 
 using namespace ceph;
 
-#define CEPH_BUFFER_ALLOC_UNIT  (MIN(CEPH_PAGE_SIZE, 4096))
+#define CEPH_BUFFER_ALLOC_UNIT  (std::min(CEPH_PAGE_SIZE, 4096u))
 #define CEPH_BUFFER_APPEND_SIZE (CEPH_BUFFER_ALLOC_UNIT - sizeof(raw_combined))
 
 #ifdef BUFFER_DEBUG
-static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
-# define bdout { simple_spin_lock(&buffer_debug_lock); std::cout
-# define bendl std::endl; simple_spin_unlock(&buffer_debug_lock); }
+# define bdout { std::lock_guard<ceph::spinlock> lg(ceph::spinlock()); std::cout
+# define bendl std::endl; }
 #else
 # define bdout if (0) { std::cout
 # define bendl std::endl; }
@@ -172,17 +171,19 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
     char *data;
     unsigned len;
     std::atomic<unsigned> nref { 0 };
-    int mempool = mempool::mempool_buffer_anon;
+    int mempool;
 
-    mutable std::atomic_flag crc_spinlock = ATOMIC_FLAG_INIT;
-    map<pair<size_t, size_t>, pair<uint32_t, uint32_t> > crc_map;
+    std::pair<size_t, size_t> last_crc_offset {std::numeric_limits<size_t>::max(), std::numeric_limits<size_t>::max()};
+    std::pair<uint32_t, uint32_t> last_crc_val;
 
-    explicit raw(unsigned l)
-      : data(NULL), len(l), nref(0) {
+    mutable ceph::spinlock crc_spinlock;
+
+    explicit raw(unsigned l, int mempool=mempool::mempool_buffer_anon)
+      : data(NULL), len(l), nref(0), mempool(mempool) {
       mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(1, len);
     }
-    raw(char *c, unsigned l)
-      : data(c), len(l), nref(0) {
+    raw(char *c, unsigned l, int mempool=mempool::mempool_buffer_anon)
+      : data(c), len(l), nref(0), mempool(mempool) {
       mempool::get_pool(mempool::pool_index_t(mempool)).adjust_count(1, len);
     }
     virtual ~raw() {
@@ -213,11 +214,12 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
       }
     }
 
+private:
     // no copying.
     // cppcheck-suppress noExplicitConstructor
-    raw(const raw &other);
-    const raw& operator=(const raw &other);
-
+    raw(const raw &other) = delete;
+    const raw& operator=(const raw &other) = delete;
+public:
     virtual char *get_data() {
       return data;
     }
@@ -247,29 +249,23 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
     }
     bool get_crc(const pair<size_t, size_t> &fromto,
          pair<uint32_t, uint32_t> *crc) const {
-      simple_spin_lock(&crc_spinlock);
-      map<pair<size_t, size_t>, pair<uint32_t, uint32_t> >::const_iterator i =
-      crc_map.find(fromto);
-      if (i == crc_map.end()) {
-          simple_spin_unlock(&crc_spinlock);
-          return false;
+      std::lock_guard<decltype(crc_spinlock)> lg(crc_spinlock);
+      if (last_crc_offset == fromto) {
+        *crc = last_crc_val;
+        return true;
       }
-      *crc = i->second;
-      simple_spin_unlock(&crc_spinlock);
-      return true;
+      return false;
     }
     void set_crc(const pair<size_t, size_t> &fromto,
          const pair<uint32_t, uint32_t> &crc) {
-      simple_spin_lock(&crc_spinlock);
-      crc_map[fromto] = crc;
-      simple_spin_unlock(&crc_spinlock);
+      std::lock_guard<decltype(crc_spinlock)> lg(crc_spinlock);
+      last_crc_offset = fromto;
+      last_crc_val = crc;
     }
     void invalidate_crc() {
-      simple_spin_lock(&crc_spinlock);
-      if (crc_map.size() != 0) {
-        crc_map.clear();
-      }
-      simple_spin_unlock(&crc_spinlock);
+      std::lock_guard<decltype(crc_spinlock)> lg(crc_spinlock);
+      last_crc_offset.first = std::numeric_limits<size_t>::max();
+      last_crc_offset.second = std::numeric_limits<size_t>::max();
     }
   };
 
@@ -281,8 +277,9 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   class buffer::raw_combined : public buffer::raw {
     size_t alignment;
   public:
-    raw_combined(char *dataptr, unsigned l, unsigned align=0)
-      : raw(dataptr, l),
+    raw_combined(char *dataptr, unsigned l, unsigned align,
+		 int mempool)
+      : raw(dataptr, l, mempool),
 	alignment(align) {
       inc_total_alloc(len);
       inc_history_alloc(len);
@@ -294,12 +291,14 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
       return create(len, alignment);
     }
 
-    static raw_combined *create(unsigned len, unsigned align=0) {
+    static raw_combined *create(unsigned len,
+				unsigned align,
+				int mempool = mempool::mempool_buffer_anon) {
       if (!align)
 	align = sizeof(size_t);
-      size_t rawlen = ROUND_UP_TO(sizeof(buffer::raw_combined),
+      size_t rawlen = round_up_to(sizeof(buffer::raw_combined),
 				  alignof(buffer::raw_combined));
-      size_t datalen = ROUND_UP_TO(len, alignof(buffer::raw_combined));
+      size_t datalen = round_up_to(len, alignof(buffer::raw_combined));
 
 #ifdef DARWIN
       char *ptr = (char *) valloc(rawlen + datalen);
@@ -314,7 +313,7 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
 
       // actual data first, since it has presumably larger alignment restriction
       // then put the raw_combined at the end
-      return new (ptr + datalen) raw_combined(ptr, len, align);
+      return new (ptr + datalen) raw_combined(ptr, len, align, mempool);
     }
 
     static void operator delete(void *ptr) {
@@ -555,7 +554,7 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
       return 0;
     }
 
-    static void close_pipe(const int *fds) {
+    static void close_pipe(const int fds[2]) {
       if (fds[0] >= 0)
 	VOID_TEMP_FAILURE_RETRY(::close(fds[0]));
       if (fds[1] >= 0)
@@ -771,6 +770,9 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   buffer::raw* buffer::create(unsigned len) {
     return buffer::create_aligned(len, sizeof(size_t));
   }
+  buffer::raw* buffer::create_in_mempool(unsigned len, int mempool) {
+    return buffer::create_aligned_in_mempool(len, sizeof(size_t), mempool);
+  }
   buffer::raw* buffer::claim_char(unsigned len, char *buf) {
     return new raw_claimed_char(len, buf);
   }
@@ -787,7 +789,8 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
     return new raw_claim_buffer(buf, len, std::move(del));
   }
 
-  buffer::raw* buffer::create_aligned(unsigned len, unsigned align) {
+  buffer::raw* buffer::create_aligned_in_mempool(
+    unsigned len, unsigned align, int mempool) {
     // If alignment is a page multiple, use a separate buffer::raw to
     // avoid fragmenting the heap.
     //
@@ -805,7 +808,12 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
       return new raw_hack_aligned(len, align);
 #endif
     }
-    return raw_combined::create(len, align);
+    return raw_combined::create(len, align, mempool);
+  }
+  buffer::raw* buffer::create_aligned(
+    unsigned len, unsigned align) {
+    return create_aligned_in_mempool(len, align,
+				     mempool::mempool_buffer_anon);
   }
 
   buffer::raw* buffer::create_page_aligned(unsigned len) {
@@ -951,6 +959,24 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   }
 
   bool buffer::ptr::at_buffer_tail() const { return _off + _len == _raw->len; }
+
+  int buffer::ptr::get_mempool() const {
+    if (_raw) {
+      return _raw->mempool;
+    }
+    return mempool::mempool_buffer_anon;
+  }
+
+  void buffer::ptr::reassign_to_mempool(int pool) {
+    if (_raw) {
+      _raw->reassign_to_mempool(pool);
+    }
+  }
+  void buffer::ptr::try_assign_to_mempool(int pool) {
+    if (_raw) {
+      _raw->try_assign_to_mempool(pool);
+    }
+  }
 
   const char *buffer::ptr::c_str() const {
     assert(_raw);
@@ -1329,7 +1355,7 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
       }
     }
     *data = p->c_str() + p_off;
-    size_t l = MIN(p->length() - p_off, want);
+    size_t l = std::min<size_t>(p->length() - p_off, want);
     p_off += l;
     if (p_off == p->length()) {
       ++p;
@@ -1343,7 +1369,7 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   uint32_t buffer::list::iterator_impl<is_const>::crc32c(
     size_t length, uint32_t crc)
   {
-    length = MIN( length, get_remaining());
+    length = std::min<size_t>(length, get_remaining());
     while (length > 0) {
       const char *p;
       size_t l = get_ptr_and_advance(length, &p);
@@ -1493,7 +1519,6 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   {
     std::swap(_len, other._len);
     std::swap(_memcopy_count, other._memcopy_count);
-    std::swap(_mempool, other._mempool);
     _buffers.swap(other._buffers);
     append_buffer.swap(other.append_buffer);
     //last_p.swap(other.last_p);
@@ -1666,9 +1691,16 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
     return is_aligned(CEPH_PAGE_SIZE);
   }
 
+  int buffer::list::get_mempool() const
+  {
+    if (_buffers.empty()) {
+      return mempool::mempool_buffer_anon;
+    }
+    return _buffers.back().get_mempool();
+  }
+
   void buffer::list::reassign_to_mempool(int pool)
   {
-    _mempool = pool;
     if (append_buffer.get_raw()) {
       append_buffer.get_raw()->reassign_to_mempool(pool);
     }
@@ -1679,7 +1711,6 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
 
   void buffer::list::try_assign_to_mempool(int pool)
   {
-    _mempool = pool;
     if (append_buffer.get_raw()) {
       append_buffer.get_raw()->try_assign_to_mempool(pool);
     }
@@ -1725,9 +1756,15 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   }
   
   bool buffer::list::rebuild_aligned_size_and_memory(unsigned align_size,
-  						   unsigned align_memory)
+						    unsigned align_memory,
+						    unsigned max_buffers)
   {
     unsigned old_memcopy_count = _memcopy_count;
+
+    if (max_buffers && _buffers.size() > max_buffers
+	&& _len > (max_buffers * align_size)) {
+      align_size = round_up_to(round_up_to(_len, max_buffers) / max_buffers, align_size);
+    }
     std::list<ptr>::iterator p = _buffers.begin();
     while (p != _buffers.end()) {
       // keep anything that's already align and sized aligned
@@ -1778,10 +1815,7 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
   void buffer::list::reserve(size_t prealloc)
   {
     if (append_buffer.unused_tail_length() < prealloc) {
-      append_buffer = buffer::create(prealloc);
-      if (_mempool >= 0) {
-	append_buffer.get_raw()->reassign_to_mempool(_mempool);
-      }
+      append_buffer = buffer::create_in_mempool(prealloc, get_mempool());
       append_buffer.set_length(0);   // unused, so far.
     }
   }
@@ -1814,6 +1848,8 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
     _buffers.splice(_buffers.begin(), bl._buffers );
     bl._len = 0;
     bl.last_p = bl.begin();
+    // we modified _buffers
+    last_p = begin();
   }
 
   void buffer::list::claim_append_piecewise(list& bl)
@@ -1879,11 +1915,9 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
     unsigned gap = append_buffer.unused_tail_length();
     if (!gap) {
       // make a new append_buffer!
-      append_buffer = raw_combined::create(CEPH_BUFFER_APPEND_SIZE);
+      append_buffer = raw_combined::create(CEPH_BUFFER_APPEND_SIZE, 0,
+					   get_mempool());
       append_buffer.set_length(0);   // unused, so far.
-      if (_mempool >= 0) {
-	append_buffer.get_raw()->reassign_to_mempool(_mempool);
-      }
     }
     append(append_buffer, append_buffer.append(c) - 1, 1);	// add segment to the list
   }
@@ -1906,14 +1940,11 @@ static std::atomic_flag buffer_debug_lock = ATOMIC_FLAG_INIT;
       
       // make a new append_buffer.  fill out a complete page, factoring in the
       // raw_combined overhead.
-      size_t need = ROUND_UP_TO(len, sizeof(size_t)) + sizeof(raw_combined);
-      size_t alen = ROUND_UP_TO(need, CEPH_BUFFER_ALLOC_UNIT) -
+      size_t need = round_up_to(len, sizeof(size_t)) + sizeof(raw_combined);
+      size_t alen = round_up_to(need, CEPH_BUFFER_ALLOC_UNIT) -
 	sizeof(raw_combined);
-      append_buffer = raw_combined::create(alen);
+      append_buffer = raw_combined::create(alen, 0, get_mempool());
       append_buffer.set_length(0);   // unused, so far.
-      if (_mempool >= 0) {
-	append_buffer.get_raw()->reassign_to_mempool(_mempool);
-      }
     }
   }
 
@@ -2426,7 +2457,7 @@ int buffer::list::write_fd(int fd, uint64_t offset) const
   while (left_pbrs) {
     ssize_t bytes = 0;
     unsigned iovlen = 0;
-    uint64_t size = MIN(left_pbrs, IOV_MAX);
+    uint64_t size = std::min<uint64_t>(left_pbrs, IOV_MAX);
     left_pbrs -= size;
     while (size > 0) {
       iov[iovlen].iov_base = (void *)p->c_str();
@@ -2471,6 +2502,10 @@ int buffer::list::write_fd_zero_copy(int fd) const
 
 __u32 buffer::list::crc32c(__u32 crc) const
 {
+  int cache_misses = 0;
+  int cache_hits = 0;
+  int cache_adjusts = 0;
+
   for (std::list<ptr>::const_iterator it = _buffers.begin();
        it != _buffers.end();
        ++it) {
@@ -2482,8 +2517,7 @@ __u32 buffer::list::crc32c(__u32 crc) const
 	if (ccrc.first == crc) {
 	  // got it already
 	  crc = ccrc.second;
-	  if (buffer_track_crc)
-	    buffer_cached_crc++;
+	  cache_hits++;
 	} else {
 	  /* If we have cached crc32c(buf, v) for initial value v,
 	   * we can convert this to a different initial value v' by:
@@ -2494,18 +2528,26 @@ __u32 buffer::list::crc32c(__u32 crc) const
 	   * note, u for our crc32c implementation is 0
 	   */
 	  crc = ccrc.second ^ ceph_crc32c(ccrc.first ^ crc, NULL, it->length());
-	  if (buffer_track_crc)
-	    buffer_cached_crc_adjusted++;
+	  cache_adjusts++;
 	}
       } else {
-	if (buffer_track_crc)
-	  buffer_missed_crc++;
+	cache_misses++;
 	uint32_t base = crc;
 	crc = ceph_crc32c(crc, (unsigned char*)it->c_str(), it->length());
 	r->set_crc(ofs, make_pair(base, crc));
       }
     }
   }
+
+  if (buffer_track_crc) {
+    if (cache_adjusts)
+      buffer_cached_crc_adjusted += cache_adjusts;
+    if (cache_hits)
+      buffer_cached_crc += cache_hits;
+    if (cache_misses)
+      buffer_missed_crc += cache_misses;
+  }
+
   return crc;
 }
 

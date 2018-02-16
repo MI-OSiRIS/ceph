@@ -18,7 +18,6 @@
 
 #include <iostream>
 #include <string>
-using namespace std;
 
 #include "common/config.h"
 #include "include/ceph_features.h"
@@ -247,7 +246,6 @@ int main(int argc, const char **argv)
 			 flags, "mon_data");
   ceph_heap_profiler_init();
 
-  uuid_d fsid;
   std::string val;
   for (std::vector<const char*>::iterator i = args.begin(); i != args.end(); ) {
     if (ceph_argparse_double_dash(args, i)) {
@@ -331,10 +329,11 @@ int main(int argc, const char **argv)
     MonMap monmap;
 
     // load or generate monmap
-    if (g_conf->monmap.length()) {
-      int err = monmapbl.read_file(g_conf->monmap.c_str(), &error);
+    const auto monmap_fn = g_conf->get_val<string>("monmap");
+    if (monmap_fn.length()) {
+      int err = monmapbl.read_file(monmap_fn.c_str(), &error);
       if (err < 0) {
-	derr << argv[0] << ": error reading " << g_conf->monmap << ": " << error << dendl;
+	derr << argv[0] << ": error reading " << monmap_fn << ": " << error << dendl;
 	exit(1);
       }
       try {
@@ -342,9 +341,8 @@ int main(int argc, const char **argv)
 
 	// always mark seed/mkfs monmap as epoch 0
 	monmap.set_epoch(0);
-      }
-      catch (const buffer::error& e) {
-	derr << argv[0] << ": error decoding monmap " << g_conf->monmap << ": " << e.what() << dendl;
+      } catch (const buffer::error& e) {
+	derr << argv[0] << ": error decoding monmap " << monmap_fn << ": " << e.what() << dendl;
 	exit(1);
       }      
     } else {
@@ -393,9 +391,10 @@ int main(int argc, const char **argv)
       }
     }
 
-    if (!g_conf->fsid.is_zero()) {
-      monmap.fsid = g_conf->fsid;
-      dout(0) << argv[0] << ": set fsid to " << g_conf->fsid << dendl;
+    const auto fsid = g_conf->get_val<uuid_d>("fsid");
+    if (!fsid.is_zero()) {
+      monmap.fsid = fsid;
+      dout(0) << argv[0] << ": set fsid to " << fsid << dendl;
     }
     
     if (monmap.fsid.is_zero()) {
@@ -513,6 +512,10 @@ int main(int argc, const char **argv)
 #endif
   }
 
+  // set up signal handlers, now that we've daemonized/forked.
+  init_async_signal_handler();
+  register_async_signal_handler(SIGHUP, sighup_handler);
+
   MonitorDBStore *store = new MonitorDBStore(g_conf->mon_data);
   {
     ostringstream oss;
@@ -572,8 +575,8 @@ int main(int argc, const char **argv)
     bufferlist mapbl;
     tmp.encode(mapbl, CEPH_FEATURES_ALL);
     bufferlist final;
-    ::encode(v, final);
-    ::encode(mapbl, final);
+    encode(v, final);
+    encode(mapbl, final);
 
     auto t(std::make_shared<MonitorDBStore::Transaction>());
     // save it
@@ -627,11 +630,17 @@ int main(int argc, const char **argv)
     std::string mon_addr_str;
     if (g_conf->get_val_from_conf_file(my_sections, "mon addr",
 				       mon_addr_str, true) == 0) {
-      if (conf_addr.parse(mon_addr_str.c_str()) && (ipaddr != conf_addr)) {
-	derr << "WARNING: 'mon addr' config option " << conf_addr
-	     << " does not match monmap file" << std::endl
-	     << "         continuing with monmap configuration" << dendl;
-      }
+      if (conf_addr.parse(mon_addr_str.c_str())) {
+        if (conf_addr.get_port() == 0)
+          conf_addr.set_port(CEPH_MON_PORT);
+        if (ipaddr != conf_addr) {
+	  derr << "WARNING: 'mon addr' config option " << conf_addr
+	       << " does not match monmap file" << std::endl
+	       << "         continuing with monmap configuration" << dendl;
+        }
+      } else
+          derr << "WARNING: invalid 'mon addr' config option" << std::endl
+               << "         continuing with monmap configuration" << dendl;
     }
   } else {
     dout(0) << g_conf->name << " does not exist in monmap, will attempt to join an existing cluster" << dendl;
@@ -679,13 +688,10 @@ int main(int argc, const char **argv)
   msgr->set_default_policy(Messenger::Policy::stateless_server(0));
   msgr->set_policy(entity_name_t::TYPE_MON,
                    Messenger::Policy::lossless_peer_reuse(
-		     CEPH_FEATURE_UID |
-		     CEPH_FEATURE_PGID64 |
-		     CEPH_FEATURE_MON_SINGLE_PAXOS));
+		     CEPH_FEATURE_SERVER_LUMINOUS));
   msgr->set_policy(entity_name_t::TYPE_OSD,
                    Messenger::Policy::stateless_server(
-		     CEPH_FEATURE_PGID64 |
-		     CEPH_FEATURE_OSDENC));
+		     CEPH_FEATURE_SERVER_LUMINOUS));
   msgr->set_policy(entity_name_t::TYPE_CLIENT,
                    Messenger::Policy::stateless_server(0));
   msgr->set_policy(entity_name_t::TYPE_MDS,
@@ -787,9 +793,6 @@ int main(int argc, const char **argv)
 
   mon->init();
 
-  // set up signal handlers, now that we've daemonized/forked.
-  init_async_signal_handler();
-  register_async_signal_handler(SIGHUP, sighup_handler);
   register_async_signal_handler_oneshot(SIGINT, handle_mon_signal);
   register_async_signal_handler_oneshot(SIGTERM, handle_mon_signal);
 

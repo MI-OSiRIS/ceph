@@ -8,8 +8,8 @@
 #include "common/config.h"
 #include "msg/Message.h"
 #include "messages/MOSDOp.h"
-#include "messages/MOSDSubOp.h"
 #include "messages/MOSDRepOp.h"
+#include "messages/MOSDRepOpReply.h"
 #include "include/assert.h"
 #include "osd/osd_types.h"
 
@@ -27,23 +27,19 @@ OpRequest::OpRequest(Message *req, OpTracker *tracker) :
   TrackedOp(tracker, req->get_recv_stamp()),
   rmw_flags(0), request(req),
   hit_flag_points(0), latest_flag_point(0),
-  hitset_inserted(false) {
+  hitset_inserted(false), qos_resp(dmc::PhaseType::reservation) {
   if (req->get_priority() < tracker->cct->_conf->osd_client_op_priority) {
     // don't warn as quickly for low priority ops
     warn_interval_multiplier = tracker->cct->_conf->osd_recovery_op_warn_multiple;
   }
   if (req->get_type() == CEPH_MSG_OSD_OP) {
     reqid = static_cast<MOSDOp*>(req)->get_reqid();
-  } else if (req->get_type() == MSG_OSD_SUBOP) {
-    reqid = static_cast<MOSDSubOp*>(req)->reqid;
   } else if (req->get_type() == MSG_OSD_REPOP) {
     reqid = static_cast<MOSDRepOp*>(req)->reqid;
+  } else if (req->get_type() == MSG_OSD_REPOPREPLY) {
+    reqid = static_cast<MOSDRepOpReply*>(req)->reqid;
   }
   req_src_inst = req->get_source_inst();
-  mark_event("header_read", request->get_recv_stamp());
-  mark_event("throttled", request->get_throttle_stamp());
-  mark_event("all_read", request->get_recv_complete_stamp());
-  mark_event("dispatched", request->get_dispatch_stamp());
 }
 
 void OpRequest::_dump(Formatter *f) const
@@ -192,7 +188,7 @@ bool OpRequest::filter_out(const set<string>& filters)
 
 ostream& operator<<(ostream& out, const OpRequest::ClassInfo& i)
 {
-  out << "class " << i.name << " rd " << i.read
-    << " wr " << i.write << " wl " << i.whitelisted;
+  out << "class " << i.class_name << " method " << i.method_name
+      << " rd " << i.read << " wr " << i.write << " wl " << i.whitelisted;
   return out;
 }

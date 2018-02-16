@@ -243,7 +243,7 @@ private:
   mempool::osdmap_mapping::vector<
     mempool::osdmap_mapping::vector<pg_t>> acting_rmap;  // osd -> pg
   //unused: mempool::osdmap_mapping::vector<std::vector<pg_t>> up_rmap;  // osd -> pg
-  epoch_t epoch;
+  epoch_t epoch = 0;
   uint64_t num_pgs = 0;
 
   void _init_mappings(const OSDMap& osdmap);
@@ -293,12 +293,6 @@ public:
     assert(osd < acting_rmap.size());
     return acting_rmap[osd];
   }
-  /* unsued
-  const std::vector<pg_t>& get_osd_up_pgs(unsigned osd) {
-    assert(osd < up_rmap.size());
-    return up_rmap[osd];
-  }
-  */
 
   void update(const OSDMap& map);
   void update(const OSDMap& map, pg_t pgid);

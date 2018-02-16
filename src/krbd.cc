@@ -40,7 +40,6 @@
 #include <blkid/blkid.h>
 #include <libudev.h>
 
-using namespace std;
 
 const static int POLL_TIMEOUT=120000;
 
@@ -133,10 +132,13 @@ static int build_map_buf(CephContext *cct, const char *pool, const char *image,
   oss << " name=" << cct->_conf->name.get_id();
 
   KeyRing keyring;
-  if (cct->_conf->auth_client_required != "none") {
+  auto auth_client_required =
+    cct->_conf->get_val<std::string>("auth_client_required");
+  if (auth_client_required != "none") {
     r = keyring.from_ceph_context(cct);
-    if (r == -ENOENT && !(cct->_conf->keyfile.length() ||
-                          cct->_conf->key.length()))
+    auto keyfile = cct->_conf->get_val<std::string>("keyfile");
+    auto key = cct->_conf->get_val<std::string>("key");
+    if (r == -ENOENT && keyfile.empty() && key.empty())
       r = 0;
     if (r < 0) {
       cerr << "rbd: failed to get secret" << std::endl;
@@ -180,7 +182,7 @@ static int wait_for_udev_add(struct udev_monitor *mon, const char *pool,
                              const char *image, const char *snap,
                              string *pname)
 {
-  struct udev_device *bus_dev = NULL;
+  struct udev_device *bus_dev = nullptr;
 
   /*
    * Catch /sys/devices/rbd/<id>/ and wait for the corresponding
@@ -257,7 +259,7 @@ static int do_map(struct udev *udev, const char *pool, const char *image,
   if (!mon)
     return -ENOMEM;
 
-  r = udev_monitor_filter_add_match_subsystem_devtype(mon, "rbd", NULL);
+  r = udev_monitor_filter_add_match_subsystem_devtype(mon, "rbd", nullptr);
   if (r < 0)
     goto out_mon;
 
@@ -376,6 +378,34 @@ out_enm:
   return r;
 }
 
+static int enumerate_devices(struct udev_enumerate *enm, const char *pool,
+                             const char *image, const char *snap)
+{
+  int r;
+
+  r = udev_enumerate_add_match_subsystem(enm, "rbd");
+  if (r < 0)
+    return r;
+
+  r = udev_enumerate_add_match_sysattr(enm, "pool", pool);
+  if (r < 0)
+    return r;
+
+  r = udev_enumerate_add_match_sysattr(enm, "name", image);
+  if (r < 0)
+    return r;
+
+  r = udev_enumerate_add_match_sysattr(enm, "current_snap", snap);
+  if (r < 0)
+    return r;
+
+  r = udev_enumerate_scan_devices(enm);
+  if (r < 0)
+    return r;
+
+  return 0;
+}
+
 static int spec_to_devno_and_krbd_id(struct udev *udev, const char *pool,
                                      const char *image, const char *snap,
                                      dev_t *pdevno, string *pid)
@@ -391,23 +421,7 @@ static int spec_to_devno_and_krbd_id(struct udev *udev, const char *pool,
   if (!enm)
     return -ENOMEM;
 
-  r = udev_enumerate_add_match_subsystem(enm, "rbd");
-  if (r < 0)
-    goto out_enm;
-
-  r = udev_enumerate_add_match_sysattr(enm, "pool", pool);
-  if (r < 0)
-    goto out_enm;
-
-  r = udev_enumerate_add_match_sysattr(enm, "name", image);
-  if (r < 0)
-    goto out_enm;
-
-  r = udev_enumerate_add_match_sysattr(enm, "current_snap", snap);
-  if (r < 0)
-    goto out_enm;
-
-  r = udev_enumerate_scan_devices(enm);
+  r = enumerate_devices(enm, pool, image, snap);
   if (r < 0)
     goto out_enm;
 
@@ -625,7 +639,8 @@ static bool dump_one_image(Formatter *f, TextTable *tbl,
     return false;
 
   if (f) {
-    f->open_object_section(id);
+    f->open_object_section("device");
+    f->dump_string("id", id);
     f->dump_string("pool", pool);
     f->dump_string("name", image);
     f->dump_string("snap", snap);
@@ -679,7 +694,7 @@ int dump_images(struct krbd_ctx *ctx, Formatter *f)
   int r;
 
   if (f) {
-    f->open_object_section("devices");
+    f->open_array_section("devices");
   } else {
     tbl.define_column("id", TextTable::LEFT, TextTable::LEFT);
     tbl.define_column("pool", TextTable::LEFT, TextTable::LEFT);
@@ -698,6 +713,46 @@ int dump_images(struct krbd_ctx *ctx, Formatter *f)
       cout << tbl;
   }
 
+  return r;
+}
+
+static int is_mapped_image(struct udev *udev, const char *pool,
+                           const char *image, const char *snap, string *pname)
+{
+  struct udev_enumerate *enm;
+  struct udev_list_entry *l;
+  int r;
+
+  if (strcmp(snap, "") == 0)
+    snap = "-";
+
+  enm = udev_enumerate_new(udev);
+  if (!enm)
+    return -ENOMEM;
+
+  r = enumerate_devices(enm, pool, image, snap);
+  if (r < 0)
+    goto out_enm;
+
+  l = udev_enumerate_get_list_entry(enm);
+  if (l) {
+    struct udev_device *dev;
+
+    dev = udev_device_new_from_syspath(udev, udev_list_entry_get_name(l));
+    if (!dev) {
+      r = -ENOMEM;
+      goto out_enm;
+    }
+
+    r = 1;
+    *pname = get_kernel_rbd_name(udev_device_get_sysname(dev));
+    udev_device_unref(dev);
+  } else {
+    r = 0;  /* not mapped */
+  }
+
+out_enm:
+  udev_enumerate_unref(enm);
   return r;
 }
 
@@ -763,4 +818,24 @@ extern "C" int krbd_unmap_by_spec(struct krbd_ctx *ctx, const char *pool,
 int krbd_showmapped(struct krbd_ctx *ctx, Formatter *f)
 {
   return dump_images(ctx, f);
+}
+
+extern "C" int krbd_is_mapped(struct krbd_ctx *ctx, const char *pool,
+                              const char *image, const char *snap,
+                              char **pdevnode)
+{
+  string name;
+  char *devnode;
+  int r;
+
+  r = is_mapped_image(ctx->udev, pool, image, snap, &name);
+  if (r <= 0)  /* error or not mapped */
+    return r;
+
+  devnode = strdup(name.c_str());
+  if (!devnode)
+    return -ENOMEM;
+
+  *pdevnode = devnode;
+  return r;
 }
