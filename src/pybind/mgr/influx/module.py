@@ -163,52 +163,15 @@ class Module(MgrModule):
         data = []
         timestamp = datetime.utcnow().isoformat() + 'Z'
 
-        # this and all related things are a hack, don't include this in any pull requests
-        limit = [   'osd.recovery_ops', 
-                    'osd.op_latency', 
-                    'osd.subop', 
-                    'osd.subop_in_bytes', 
-                    'osd.subop_latency', 
-                    'osd.op_wip', 
-                    'osd.stat_bytes', 
-                    'osd.stat_bytes_used', 
-                    'osd.stat_bytes_avail',
-                    'osd.op_w',
-                    'osd.op_in_bytes',
-                    'osd.op_r',
-                    'osd.op_out_bytes' 
-                ]
-
         for daemon, counters in self.get_all_perf_counters().iteritems():
             svc_type, svc_id = daemon.split(".")
             metadata = self.get_metadata(svc_type, svc_id)
-
-            # there are too many data points if we collect every point from every 
-            # daemon - the influx write fails with broken pipe error
-            # therefore as a quick-fix I've limited to only OSD and only stats as we are 
-            # interested in.  
-            # the real fix is one of these, probably .5 
-            #  We have 700 OSD but only +30 other daemons.    
-            #  0.5 Use the batch_size param to client.write_points to batch writes  (https://github.com/influxdata/influxdb-python/blob/master/influxdb/client.py#L442)
-            #  1. configuration or other limit on stats from each daemon (difficult, different stats every daemon)
-            #  1.5 I thought there was an 'important' property that limited daemon stats?  Maybe there are a lot of important stats?!
-            #  2. break the write up into several calls to client.write (see option .5 first)
-            #  
-
-            # this is part of the hack
-            if 'osd' not in daemon:
-                continue
 
             for path, counter_info in counters.items():
                 if counter_info['type'] & self.PERFCOUNTER_HISTOGRAM:
                     continue
 
                 value = counter_info['value']
-
-                # further limit the stats we collect from each OSD
-                # part of hack
-                if path not in limit:
-                    continue
 
                 data.append({
                     "measurement": "ceph_daemon_stats",
