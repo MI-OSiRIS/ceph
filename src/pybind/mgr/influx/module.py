@@ -266,7 +266,9 @@ class Module(MgrModule):
                 if key == 'port':
                     conf[key] = int(conf[key])
 
-            conf['hostname'] = dest['hostname']
+            # if not cast to string set_health_check will complain when var is used in error summary string format
+            # everything else seems to consider it a string already (?)
+            conf['hostname'] = str(dest['hostname'])
 
             self.log.debug("Sending data to Influx host: %s",
                 conf['hostname'])
@@ -314,8 +316,8 @@ class Module(MgrModule):
                     'MGR_INFLUX_SEND_FAILED': {
                         'severity': 'warning',
                         'summary': 'Failed to send data to InfluxDB server at %s:%d'
-                                   ' due to an connection error'
-                                   % (conf['hostname'], conf['port']),
+                                   ' due to a connection error'
+                                   %(conf['hostname'], conf['port']),
                         'detail': [str(e)]
                     }
                 })
