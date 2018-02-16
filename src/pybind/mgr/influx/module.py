@@ -266,10 +266,12 @@ class Module(MgrModule):
                 if key == 'port':
                     conf[key] = int(conf[key])
 
-            self.log.debug("Sending data to Influx host: %s",
-                dest['hostname'])
+            conf['hostname'] = dest['hostname']
 
-            client = InfluxDBClient(dest['hostname'], conf['port'],
+            self.log.debug("Sending data to Influx host: %s",
+                conf['hostname'])
+
+            client = InfluxDBClient(conf['hostname'], conf['port'],
                 conf['username'], 
                 conf['password'], 
                 conf['database'],
