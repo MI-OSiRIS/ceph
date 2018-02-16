@@ -311,7 +311,6 @@ class Module(MgrModule):
             # db can not be created
             try:
                 client.write_points(df_stats[0], 'ms')
-                # for larger cluster sizes (600+ OSD) points must be broken into smaller batches or write will fail 
                 client.write_points(daemon_stats, 'ms')
                 client.write_points(self.get_pg_summary(df_stats[1]))
                 self.set_health_checks(dict())
