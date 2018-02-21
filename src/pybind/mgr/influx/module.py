@@ -81,8 +81,8 @@ class Module(MgrModule):
             'max_avail'
         ]
 
-        mgr_id = self.get_mgr_id()
-        pool_info = {}
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+
         for df_type in df_types:
             for pool in df['pools']:
                 point = {
@@ -93,13 +93,14 @@ class Module(MgrModule):
                         "type_instance" : df_type,
                         "mgr_id" : mgr_id,
                     },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "time" : timestamp,
                         "fields": {
                             "value" : pool['stats'][df_type],
                         }
                 }
                 data.append(point)
                 pool_info.update({str(pool['id']):pool['name']})
+
         return data, pool_info
 
     def get_pg_summary(self, pool_info):
@@ -107,6 +108,8 @@ class Module(MgrModule):
         pool_sum = self.get('pg_summary')['by_pool']
         mgr_id = self.get_mgr_id()
         data = []
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+
         for osd_id, stats in osd_sum.iteritems():
             metadata = self.get_metadata('osd', "%s" % osd_id)
             for stat in stats:
@@ -117,7 +120,7 @@ class Module(MgrModule):
                             "type_instance": stat,
                             "host": metadata['hostname']
                         },
-                            "time" : datetime.utcnow().isoformat() + 'Z', 
+                            "time" : timestamp, 
                             "fields" : {
                                 "value": stats[stat]
                             }
@@ -133,7 +136,7 @@ class Module(MgrModule):
                         "type_instance" : stat,
                         "mgr_id" : mgr_id,
                     },
-                        "time" : datetime.utcnow().isoformat() + 'Z',
+                        "time" : timestamp,
                         "fields": {
                             "value" : stats[stat],
                         }
@@ -144,6 +147,7 @@ class Module(MgrModule):
 
     def get_daemon_stats(self):
         data = []
+        timestamp = datetime.utcnow().isoformat() + 'Z'
 
         for daemon, counters in self.get_all_perf_counters().iteritems():
             svc_type, svc_id = daemon.split(".")
@@ -163,7 +167,7 @@ class Module(MgrModule):
                         "host": metadata['hostname'],
                         "fsid": self.get_fsid()
                     },
-                    "time": datetime.utcnow().isoformat() + 'Z',
+                    "time": timestamp,
                     "fields": {
                         "value": value
                     }
@@ -236,10 +240,14 @@ class Module(MgrModule):
                 if key == 'port':
                     conf[key] = int(conf[key])
 
-            self.log.debug("Sending data to Influx host: %s",
-                dest['hostname'])
+            # if not cast to string set_health_check will complain when var is used in error summary string format
+            # everything else seems to consider it a string already (?)
+            conf['hostname'] = str(dest['hostname'])
 
-            client = InfluxDBClient(dest['hostname'], conf['port'],
+            self.log.debug("Sending data to Influx host: %s",
+                conf['hostname'])
+
+            client = InfluxDBClient(conf['hostname'], conf['port'],
                 conf['username'], 
                 conf['password'], 
                 conf['database'],
@@ -265,6 +273,47 @@ class Module(MgrModule):
         daemon_stats = self.get_daemon_stats()
         pg_summary = self.get_pg_summary(df_stats[1])
 
+        for client,conf in self.clients:
+            # using influx client get_list_database requires admin privs,
+            # instead we'll catch the not found exception and inform the user if
+            # db can not be created
+            try:
+                client.write_points(df_stats[0], 'ms')
+                client.write_points(daemon_stats, 'ms')
+                client.write_points(self.get_pg_summary(df_stats[1]))
+                self.set_health_checks(dict())
+            except ConnectionError as e:
+                # InfluxDBClient also has get_host and get_port but since we have the config here anyways...
+                self.log.exception("Failed to connect to Influx host %s:%d",
+                                   conf['hostname'], conf['port'])
+                self.set_health_checks({
+                    'MGR_INFLUX_SEND_FAILED': {
+                        'severity': 'warning',
+                        'summary': 'Failed to send data to InfluxDB server at %s:%d'
+                                   ' due to a connection error'
+                                   %(conf['hostname'], conf['port']),
+                        'detail': [str(e)]
+                    }
+                })
+            except InfluxDBClientError as e:
+                if e.code == 404:
+                    self.log.info("Database '%s' not found, trying to create "
+                                  "(requires admin privs).  You can also create "
+                                  "manually and grant write privs to user "
+                                  "'%s'", conf['database'],
+                                  conf['username'])
+                    client.create_database(conf['database'])
+                else:
+                    self.set_health_checks({
+                        'MGR_INFLUX_SEND_FAILED': {
+                            'severity': 'warning',
+                            'summary': 'Failed to send data to InfluxDB',
+                            'detail': [str(e)]
+                        }
+                    })
+                    raise
+
+    def shutdown(self):
         self.log.info('Stopping influx module')
         self.run = False
         self.event.set()
