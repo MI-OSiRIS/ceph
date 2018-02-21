@@ -45,6 +45,8 @@ class Module(MgrModule):
         'username': None,
         'password': None,
         'interval': 5,
+        'ssl': 'false',
+        'verify_ssl': 'true',
         'destinations': None
     }
 
@@ -67,6 +69,7 @@ class Module(MgrModule):
     def get_df_stats(self):
         df = self.get("df")
         data = []
+        pool_info = {}
 
         df_types = [
             'bytes_used',
@@ -187,7 +190,7 @@ class Module(MgrModule):
 
     def init_module_config(self):
         self.config['hostname'] = \
-                self.get_config("hostname", default=self.config_keys['hostname'])
+            self.get_config("hostname", default=self.config_keys['hostname'])
         self.config['port'] = \
                 int(self.get_config("port", default=self.config_keys['port']))
         self.config['database'] = \
@@ -203,65 +206,65 @@ class Module(MgrModule):
         self.config['destinations'] = \
                 self.get_config_json("destinations")
 
-        if not self.config['hostname'] and not self.config['destinations']:
-            self.log.error("No Influx server configured, please set one using: "
-                           "ceph influx config-set mgr/influx/hostname <hostname> or ceph influx config-set mgr/influx/destinations '<json destinations>'")
-            return
-
         self.init_influx_clients()
 
     def init_influx_clients(self):
         self.clients = []
         
         if not self.config['destinations']:
-            self.log.debug("Sending data to Influx host: %s",
-                    self.config['hostname'])
-            client = InfluxDBClient(self.config['hostname'], self.config['port'],
-                    self.config['username'],
-                    self.config['password'],
-                    self.config['database'])
-            self.clients.append(client)
+            destinations = [ 
+                { 
+                    'hostname':   self.config['hostname'],
+                    'username':   self.config['username'],
+                    'password':   self.config['password'],
+                    'database':   self.config['database'],
+                    'ssl':        self.config['ssl'],
+                    'verify_ssl': self.config['verify_ssl']
+                },
+            ]
         else: 
-            for dest in self.config['destinations']:
-                merge_configs = [ 'port', 'database', 'username', 'password']
-                conf = dict()
+            destinations = self.config['destinations']
+        
+        for dest in destinations:
+            # use global settings if these keys not set in destinations object 
+            merge_configs = [ 'port', 'database', 'username', 'password', 'ssl', 'verify_ssl']
+            conf = dict()
 
-                for key in merge_configs:
-                    conf[key] = dest[key] if key in dest else self.config[key]
+            for key in merge_configs:
+                conf[key] = dest[key] if key in dest else self.config[key]
+                # make sure this is an int or may encounter type errors later
+                if key == 'port':
+                    conf[key] = int(conf[key])
 
-                self.log.debug("Sending data to Influx host: %s",
-                    dest['hostname'])
+            self.log.debug("Sending data to Influx host: %s",
+                dest['hostname'])
 
-                client = InfluxDBClient(dest['hostname'], int(conf['port']),
+            client = InfluxDBClient(dest['hostname'], conf['port'],
                 conf['username'], 
                 conf['password'], 
-                conf['database'] )
-                self.clients.append(client)
+                conf['database'],
+                conf['ssl'],
+                conf['verify_ssl'])
+
+            self.clients.append([client,conf])
 
     def send_to_influx(self):
+        if not self.config['hostname'] and not self.config['destinations']:
+            self.log.error("No Influx server configured, please set using: "
+                           "ceph influx config-set mgr/influx/hostname <hostname> or ceph influx config-set mgr/influx/destinations '<json array>'")
+            self.set_health_checks({
+                'MGR_INFLUX_NO_SERVER': {
+                    'severity': 'warning',
+                    'summary': 'No InfluxDB server configured',
+                    'detail': ['Configuration option hostname not set']
+                }
+            })
+            return
+
         df_stats = self.get_df_stats()
         daemon_stats = self.get_daemon_stats()
         pg_summary = self.get_pg_summary(df_stats[1])
 
-        self.log.error(daemon_stats)
-
-        for client in self.clients:
-            try:
-                client.write_points(df_stats[0], 'ms')
-                client.write_points(daemon_stats, 'ms')
-                client.write_points(pg_summary)
-            except InfluxDBClientError as e:
-                if e.code == 404:
-                    self.log.info("Database '%s' not found, trying to create "
-                        "(requires admin privs).  You can also create "
-                        "manually and grant write privs to user "
-                        "'%s'", self.config['database'],
-                        self.config['username'])
-                    client.create_database(self.config['database'])
-                else:
-                    raise
-
-    def shutdown(self):
         self.log.info('Stopping influx module')
         self.run = False
         self.event.set()
@@ -278,7 +281,6 @@ class Module(MgrModule):
             self.log.debug('Setting configuration option %s to %s', key, value)
             self.set_config_option(key, value)
             self.set_config(key, value)
-            return 0, 'Configuration option {0} updated'.format(key), ''
         elif cmd['prefix'] == 'influx send':
             self.send_to_influx()
             return 0, 'Sending data to Influx', ''
@@ -289,7 +291,6 @@ class Module(MgrModule):
 
             result = {
                 'daemon_stats': daemon_stats,
-                'df_stats': df_stats
             }
 
             return 0, json.dumps(result, indent=2), 'Self-test OK'
