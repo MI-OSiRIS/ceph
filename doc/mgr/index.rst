@@ -32,5 +32,6 @@ sensible.
     RESTful plugin <restful>
     Zabbix plugin <zabbix>
     Prometheus plugin <prometheus>
+    Writing plugins <plugins>
     Influx plugin <influx>
 

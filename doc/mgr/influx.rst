@@ -2,65 +2,75 @@
 Influx Plugin 
 =============
 
-The influx plugin continuously collects and sends time series data to an
-influxdb database.
-
-The influx plugin was introduced in the 13.x *Mimic* release.
-
---------
-Enabling 
---------
-
-To enable the module, use the following command:
-
-::
-
-    ceph mgr module enable influx
-
-If you wish to subsequently disable the module, you can use the equivalent
-*disable* command:
-
-::
-
-    ceph mgr module disable influx
+The influx plugin continuously collects and sends time series data to an influxdb database. Users have the option to specify what type of stats they want to collect. 
+Some default counters are already set. However, users will have the option to choose some additional counters to collect. 
 
 -------------
 Configuration 
 -------------
 
-For the influx module to send statistics to an InfluxDB server, it
-is necessary to configure the servers address and some authentication
-credentials.
+In order for this module to work, configuration keys must be set ``ceph config-key set <key> <value>``. 
 
-Set configuration values using the following command:
+^^^^^^^^
+Required 
+^^^^^^^^
 
-::
+The following configuration keys are required:
 
-    ceph config-key set mgr/influx/<key> <value>
+- mgr/influx/influx_configs
+
+    Since this module may be running on more than one host, this configuration takes the hostname, username, and password for each host. It also has the ability to take in more than one host at a time. 
+    Example:
+
+    ``ceph config-set influx_configs  [{host1,username1,password1},{host2,username2,password2},{host3,username3,password3}]``
 
 
-The most important settings are ``hostname``, ``username`` and ``password``.  
-For example, a typical configuration might look like this:
 
-::
+- mgr/influx/interval 
 
-    ceph config-key set mgr/influx/hostname influx.mydomain.com
-    ceph config-key set mgr/influx/username admin123
-    ceph config-key set mgr/influx/password p4ssw0rd
-    
-Additional optional configuration settings are:
+- mgr/influx/stats
 
-:interval: Time between reports to InfluxDB.  Default 5 seconds.
-:database: InfluxDB database name.  Default "ceph".  You will need to create this database and grant write privileges to the configured username or the username must have admin privileges to create it.  
-:port: InfluxDB server port.  Default 8086
-:ssl: Use https connection for InfluxDB server. Use "true" or "false". Default false
-:verify_ssl: Verify https cert for InfluxDB server. Use "true" or "false". Default true
+    Users have the ability to collect stats about either the osd, cluster, or pool. If more than one stat is desired, separate each additional stat with a comma. 
+    Example:
+
+    ``ceph config-set stats osd,cluster,pool``
+
+- mgr/influx/ports
+
+
+^^^^^^^^
+Optional 
+^^^^^^^^
+
+Users have the ability to collect additional counters for each osd or each cluster by adding a list of counters under the following configuration key:
+
+- mgr/influx/extended_cluster 
+
+- mgr/influx/extended_osd
+--------
+Enabling 
+--------
+
+To enable the module, the following should be performed:
+
+- Load module by including this in the ceph.conf file.::
+
+    [mgr]
+        mgr_modules = influx  
+
+- Initialize the module to run every set interval  ``ceph mgr module enable influx``.
+
+---------
+Disabling
+---------
+
+``ceph mgr module disable influx``
 
 ---------
 Debugging 
 ---------
 
-By default, a few debugging statments as well as error statements have been set to print in the log files. Users can add more if necessary.
+By default, a few debugging statements as well as error statements have been set to print in the log files. Users can add more if necessary.
 To make use of the debugging option in the module:
 
 - Add this to the ceph.conf file.::
@@ -71,16 +81,15 @@ To make use of the debugging option in the module:
 - Use this command ``ceph tell mgr.<mymonitor> influx self-test``.
 - Check the log files. Users may find it easier to filter the log files using *mgr[influx]*.
 
---------------------
-Interesting counters
---------------------
+-----
+Usage
+-----
 
-The following tables describe a subset of the values output by
-this module.
+^^^^^^^^^^^^^^^^
+Default Counters
+^^^^^^^^^^^^^^^^
 
-^^^^^
-Pools
-^^^^^
+**pool** 
 
 +---------------+-----------------------------------------------------+
 |Counter        | Description                                         |
@@ -100,9 +109,7 @@ Pools
 |raw_bytes_used | Bytes used in pool including copies made            |
 +---------------+-----------------------------------------------------+
 
-^^^^
-OSDs
-^^^^
+**osd**
 
 +------------+------------------------------------+
 |Counter     | Description                        |
@@ -116,6 +123,20 @@ OSDs
 |op_out_bytes| Client operations total read size  |
 +------------+------------------------------------+
 
+
+**cluster**
+The cluster will collect the same type of data as the osd by default but instead of collecting per osd, it will sum up the performance counter 
+for all osd.
+
+^^^^^^^^
+extended
+^^^^^^^^
+There are many other counters that can be collected by configuring the module such as operational counters and suboperational counters. A couple of counters are listed and described below, but additional counters 
+can be found here https://github.com/ceph/ceph/blob/5a197c5817f591fc514f55b9929982e90d90084e/src/osd/OSD.cc
+
+**Operations**
+
+- Latency counters are measured in microseconds unless otherwise specified in the description.
 
 +------------------------+--------------------------------------------------------------------------+
 |Counter                 | Description                                                              |
@@ -158,6 +179,3 @@ OSDs
 +------------------------+--------------------------------------------------------------------------+
 |op_before_dequeue_op_lat| Latency of IO before calling dequeue_op(already dequeued and get PG lock)|
 +------------------------+--------------------------------------------------------------------------+
-
-Latency counters are measured in microseconds unless otherwise specified in the description.
-
