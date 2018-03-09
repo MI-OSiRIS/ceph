@@ -42,6 +42,8 @@
 
 #include <fuse.h>
 
+#include <unistd.h>
+
 #define dout_context g_ceph_context
 
 static void fuse_usage()
@@ -106,6 +108,10 @@ int main(int argc, const char **argv, const char *envp[]) {
   const char **newargv;
   int newargc;
   vec_to_argv(argv[0], args, &newargc, &newargv);
+
+  // Get UID and GID for the user
+  int uid = getuid();
+  int gid = getgid();
 
   // check for 32-bit arch
 #ifndef __LP64__
