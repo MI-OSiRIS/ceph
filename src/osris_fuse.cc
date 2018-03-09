@@ -109,10 +109,6 @@ int main(int argc, const char **argv, const char *envp[]) {
   int newargc;
   vec_to_argv(argv[0], args, &newargc, &newargv);
 
-  // Get UID and GID for the user
-  int uid = getuid();
-  int gid = getgid();
-
   // check for 32-bit arch
 #ifndef __LP64__
     cerr << std::endl;
@@ -255,7 +251,11 @@ int main(int argc, const char **argv, const char *envp[]) {
     }
     
     client->update_metadata("mount_point", cfuse->get_mount_point());
-    perms = client->pick_my_perms();
+
+    // Get UID and GID for the user
+    uid_t uid = getuid();
+    gid_t gid = getgid();
+    perms = client->pick_my_perms(uid, gid);
     {
       // start up fuse
       // use my argc, argv (make sure you pass a mount point!)
