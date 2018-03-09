@@ -290,9 +290,9 @@ class Client : public Dispatcher, public md_config_obs_t {
 public:
   void tick();
 
-  UserPerm pick_my_perms() {
-    uid_t uid = user_id >= 0 ? user_id : -1;
-    gid_t gid = group_id >= 0 ? group_id : -1;
+  UserPerm pick_my_perms(uid_t uid, gid_t gid) {
+    this->uid = uid;
+    this->gid = gid;
     return UserPerm(uid, gid);
   }
 
