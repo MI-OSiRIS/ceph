@@ -106,7 +106,6 @@ class Module(MgrModule):
                         "type_instance": df_type,
                         "fsid": self.get_fsid()
                     },
-<<<<<<< HEAD
                     "time": datetime.utcnow().isoformat() + 'Z',
                     "fields": {
                         "value": pool['stats'][df_type],
@@ -114,7 +113,6 @@ class Module(MgrModule):
                 data.append(point)
                 pool_info.update({str(pool['id']):pool['name']})
 
->>>>>>> 4545441862... [mgr] [influx] Move data point timestamp calculation out of loops
         return data, pool_info
 
     def get_daemon_stats(self):
