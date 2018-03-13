@@ -48,6 +48,8 @@ class Module(MgrModule):
         'interval': 5,
         'ssl': 'false',
         'verify_ssl': 'true',
+        'timeout': 2,   # too long a timeout/retries and we hold up the next send
+        'retries': 1,
         'destinations': None
     }
 
@@ -237,7 +239,13 @@ class Module(MgrModule):
         verify_ssl = \
             self.get_config("verify_ssl", default=self.config_keys['verify_ssl'])
         self.config['verify_ssl'] = verify_ssl.lower() == 'true'
-
+        self.config['timeout'] = \
+            int(self.get_config("timeout",
+                                default=self.config_keys['timeout']))
+        self.config['retries'] = \
+            int(self.get_config("retries",
+                                default=self.config_keys['retries']))
+        
         # get_config_json returns None if key is not set, does not accept default arg 
         self.config['destinations'] = \
                 self.get_config_json("destinations")
@@ -255,7 +263,9 @@ class Module(MgrModule):
                     'password':   self.config['password'],
                     'database':   self.config['database'],
                     'ssl':        self.config['ssl'],
-                    'verify_ssl': self.config['verify_ssl']
+                    'verify_ssl': self.config['verify_ssl'],
+                    'timeout'   : self.config['timeout'],
+                    'retries'   : self.config['retries']
                 },
             ]
         else: 
@@ -263,13 +273,13 @@ class Module(MgrModule):
         
         for dest in destinations:
             # use global settings if these keys not set in destinations object 
-            merge_configs = [ 'port', 'database', 'username', 'password', 'ssl', 'verify_ssl']
+            merge_configs = [ 'port', 'database', 'username', 'password', 'ssl', 'verify_ssl', 'timeout', 'retries']
             conf = dict()
 
             for key in merge_configs:
                 conf[key] = dest[key] if key in dest else self.config[key]
                 # make sure this is an int or may encounter type errors later
-                if key == 'port':
+                if key in [ 'port', 'timeout','retries' ]:
                     conf[key] = int(conf[key])
 
             # if not cast to string set_health_check will complain when var is used in error summary string format
@@ -284,7 +294,9 @@ class Module(MgrModule):
                 conf['password'], 
                 conf['database'],
                 conf['ssl'],
-                conf['verify_ssl'])
+                conf['verify_ssl'],
+                conf['timeout'],
+                conf['retries'])
 
             self.clients.append([client,conf])
 
@@ -327,6 +339,7 @@ class Module(MgrModule):
                         'detail': [str(e)]
                     }
                 })
+                continue
             except InfluxDBClientError as e:
                 if e.code == 404:
                     self.log.info("Database '%s' not found, trying to create "
