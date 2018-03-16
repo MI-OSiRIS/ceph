@@ -9,7 +9,7 @@ from mgr_module import MgrModule
 try:
     from influxdb import InfluxDBClient
     from influxdb.exceptions import InfluxDBClientError
-    from requests.exceptions import ConnectionError
+    from requests.exceptions import ConnectionError, ReadTimeout
 except ImportError:
     InfluxDBClient = None
 
@@ -48,7 +48,7 @@ class Module(MgrModule):
         'interval': 5,
         'ssl': 'false',
         'verify_ssl': 'true',
-        'timeout': 2,   # too long a timeout/retries and we hold up the next send
+        'timeout': 4,   
         'retries': 1,
         'destinations': None
     }
@@ -339,7 +339,18 @@ class Module(MgrModule):
                         'detail': [str(e)]
                     }
                 })
-                continue
+            except ReadTimeout as e:
+                self.log.exception("Timeout waiting for response from influx host %s:%d",
+                                   conf['hostname'], conf['port'])
+                self.set_health_checks({
+                    'MGR_INFLUX_SEND_FAILED': {
+                        'severity': 'warning',
+                        'summary': 'Failed to send data to InfluxDB server at %s:%d'
+                                   ' due to a response timeout from server'
+                                   %(conf['hostname'], conf['port']),
+                        'detail': [str(e)]
+                    }
+                })
             except InfluxDBClientError as e:
                 if e.code == 404:
                     self.log.info("Database '%s' not found, trying to create "
