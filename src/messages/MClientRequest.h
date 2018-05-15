@@ -143,6 +143,7 @@ public:
   void set_caller_uid(unsigned u) { head.caller_uid = u; }
   void set_caller_gid(unsigned g) { head.caller_gid = g; }
   void set_gid_list(int count, const gid_t *gids) {
+    gid_list.clear();
     gid_list.reserve(count);
     for (int i = 0; i < count; ++i) {
       gid_list.push_back(gids[i]);

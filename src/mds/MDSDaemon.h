@@ -63,7 +63,6 @@ class MDSDaemon : public Dispatcher, public md_config_obs_t {
   AuthAuthorizeHandlerRegistry *authorize_handler_service_registry;
 
   std::string name;
-
   Messenger    *messenger;
   MonClient    *monc;
   MgrClient     mgrc;
@@ -150,6 +149,8 @@ class MDSDaemon : public Dispatcher, public md_config_obs_t {
 protected:
   bool handle_core_message(Message *m);
   
+  void is_ldap_available();
+
   // special message types
   friend class C_MDS_Send_Command_Reply;
   static void send_command_reply(MCommand *m, MDSRank* mds_rank, int r,

@@ -6513,6 +6513,54 @@ static std::vector<Option> get_rbd_mirror_options() {
 
 std::vector<Option> get_mds_options() {
   return std::vector<Option>({
+    // RM_TEST BEGIN
+
+    Option("mds_idmap", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description("whether or not 'idmap' capabilities are allowed"),
+
+    Option("mds_idmap_backend", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("ldap")
+    .set_description("comma delimited list of methods, in order of precedence, by which client would like to set credentials"),
+
+    Option("mds_idmap_ldap_uri", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description("uri for connecting to ldap server"),
+
+    Option("mds_idmap_ldap_binddn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description("ldap bind dn name"),
+
+    Option("mds_idmap_ldap_bindpw", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description("plaintext version of ldap bind password"),
+
+    Option("mds_idmap_ldap_secret", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("/etc/openldap/secret")
+    .set_description("path to file containing credentials for mds_idmap_ldap_binddn."),
+
+    Option("mds_idmap_ldap_idattr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("voPersonApplicationUID;app-ceph")
+    .set_description("which attribute you'd like to query ldap client search with"),
+
+    Option("mds_idmap_ldap_groupattr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("dn")
+    .set_description("which attribute you'd like to query ldap group search with"),
+
+    Option("mds_idmap_ldap_memberattr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("uniqueMember")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_basedn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description("ldap base_dn for client search"),
+
+    Option("mds_idmap_ldap_groupdn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description("ldap base_dn for group search"),
+
+    // RM_TEST END
+
     Option("mds_data", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("/var/lib/ceph/mds/$cluster-$id")
     .set_flag(Option::FLAG_NO_MON_UPDATE)
