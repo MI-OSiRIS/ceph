@@ -1,4 +1,4 @@
-// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*- 
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -20,8 +20,10 @@
 #include <boost/spirit/include/qi.hpp>
 #include <boost/spirit/include/phoenix_operator.hpp>
 #include <boost/spirit/include/phoenix.hpp>
+#include <boost/algorithm/string.hpp>
 
 #include "common/debug.h"
+
 #include "MDSAuthCaps.h"
 
 #define dout_subsys ceph_subsys_mds
@@ -53,6 +55,7 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
     using qi::lit;
 
     spaces = +(lit(' ') | lit('\n') | lit('\t'));
+    delim = +(lit(';') | lit(','));
 
     quoted_path %=
       lexeme[lit("\"") >> *(char_ - '"') >> '"'] | 
@@ -86,17 +89,25 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
         (lit("r"))[_val = MDSCapSpec(MDSCapSpec::READ)]
         );
 
+    // Fixme: Currently need to assume idmap is specified last - :(
+    idmap = -(*spaces >> delim >> *spaces >> lit("idmap"));
+            //(delim >> *spaces >> lit("idmap") >>  delim) |
+            //(lit("idmap") >> *spaces >> delim) |
+            //(delim >> *spaces >> lit("idmap")) );
+
     grant = lit("allow") >> (capspec >> match)[_val = phoenix::construct<MDSCapGrant>(_1, _2)];
-    grants %= (grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
-    mdscaps = grants  [_val = phoenix::construct<MDSAuthCaps>(_1)]; 
+    grants %= ((grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' '))) >> -(*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
+    mdscaps = (grants >> idmap) [_val = phoenix::construct<MDSAuthCaps>(_1, _2)]; 
   }
   qi::rule<Iterator> spaces;
+  qi::rule<Iterator> delim;
   qi::rule<Iterator, string()> quoted_path, unquoted_path;
   qi::rule<Iterator, MDSCapSpec()> capspec;
   qi::rule<Iterator, string()> path;
   qi::rule<Iterator, uint32_t()> uid;
   qi::rule<Iterator, std::vector<uint32_t>() > uintlist;
   qi::rule<Iterator, std::vector<uint32_t>() > gidlist;
+  qi::rule<Iterator, string() > idmap;
   qi::rule<Iterator, MDSCapMatch()> match;
   qi::rule<Iterator, MDSCapGrant()> grant;
   qi::rule<Iterator, std::vector<MDSCapGrant>()> grants;
@@ -198,7 +209,7 @@ bool MDSAuthCaps::is_capable(std::string_view inode_path,
 		   << " owner " << inode_uid << ":" << inode_gid
 		   << " mode 0" << std::oct << inode_mode << std::dec
 		   << ") by caller " << caller_uid << ":" << caller_gid
-// << "[" << caller_gid_list << "]";
+                // << "[" << caller_gid_list << "]";
 		   << " mask " << mask
 		   << " new " << new_uid << ":" << new_gid
 		   << " cap: " << *this << dendl;
@@ -215,6 +226,7 @@ bool MDSAuthCaps::is_capable(std::string_view inode_path,
 	  i->match.gids.end()) {
 	gids.push_back(caller_gid);
       }
+
       if (caller_gid_list) {
 	std::set_intersection(i->match.gids.begin(), i->match.gids.end(),
 			      caller_gid_list->begin(), caller_gid_list->end(),
@@ -248,6 +260,7 @@ bool MDSAuthCaps::is_capable(std::string_view inode_path,
 	  continue;
 	}
       }
+
       if (mask & MAY_CHGRP) {
 	// you can only chgrp *to* one of your groups... if you own the file.
 	if (inode_uid != caller_uid ||
@@ -279,7 +292,6 @@ bool MDSAuthCaps::is_capable(std::string_view inode_path,
       }
     }
   }
-
   return false;
 }
 
@@ -287,6 +299,11 @@ void MDSAuthCaps::set_allow_all()
 {
     grants.clear();
     grants.push_back(MDSCapGrant(MDSCapSpec(MDSCapSpec::ALL), MDSCapMatch()));
+}
+
+bool MDSAuthCaps::idmap_required() 
+{
+    return idmap; 
 }
 
 bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
@@ -300,10 +317,14 @@ bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
 
   auto iter = str.begin();
   auto end = str.end();
+
   MDSCapParser<decltype(iter)> g;
 
   bool r = qi::phrase_parse(iter, end, g, ascii::space, *this);
+  idmap = (str.find("idmap") != std::string::npos);
+
   cct = c;  // set after parser self-assignment
+
   if (r && iter == end) {
     for (auto& grant : grants) {
       std::sort(grant.match.gids.begin(), grant.match.gids.end());
@@ -332,6 +353,273 @@ bool MDSAuthCaps::allow_all() const
   return false;
 }
 
+vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
+
+  vector<string> backends = get_idmap_backend();
+  vector<uint64_t> ids;
+
+  for (size_t i = 0; i < backends.size(); ++i) {
+    if (backends[i] == "ldap") {
+      ids = ldap_lookup(name, is_valid);
+    }
+    if (backends[i] == "key") {
+      // Fixme: Implement key backend
+      // ids = key_lookup();
+    }
+
+    if (!ids.empty()) {
+      for (auto& grant : grants) {
+        grant.match.uid = ids[0];
+        grant.match.gids.clear();
+        for (auto i = ids.begin() + 2; i != ids.end(); ++i) {
+          grant.match.gids.push_back(*i);
+        }
+      }
+
+      string gids_list = "[";
+      for (size_t i = 2; i < ids.size() - 1; ++i) {
+        gids_list += to_string(ids[i]);
+        gids_list += ", ";
+      }
+      gids_list += to_string(ids.back());
+      gids_list += "]";
+ 
+      ldout(cct, 5) << __func__ << " set keys according to backend: " << backends[i] << dendl;
+      ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
+      ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
+      ldout(cct, 5) << __func__ << " set group gids list to: " << gids_list << dendl;
+    } else {
+      ldout(cct, 5) << __func__ << " failed to set keys according to backend: " << backends[i] << dendl;
+    }
+  }
+
+  if (ids.empty()) {
+    ldout(cct, 1) << __func__ << " no specified backends successfully returned. Original ids maintained." << dendl;
+  }
+
+  return ids;
+}
+
+vector<string> MDSAuthCaps::get_idmap_backend()
+{
+  string backend = g_conf->get_val<string>("mds_idmap_backend");
+  boost::erase_all(backend, " ");
+  vector<string> backend_list; string item;
+  stringstream str(backend);
+  while (getline(str, item, ',')) {
+    backend_list.push_back(item);
+  }
+  return backend_list;
+}
+
+string MDSAuthCaps::get_ldap_bindpw()
+{
+  string ldap_bindpw = "";
+  string ldap_plaintext = g_conf->get_val<string>("mds_idmap_ldap_bindpw");
+  string ldap_secret = g_conf->get_val<string>("mds_idmap_ldap_secret");
+
+  if (!ldap_secret.empty()) {
+    char bindpw[1024];
+    memset(bindpw, 0, 1024);
+    int pwlen = safe_read_file("" /* base */, ldap_secret.c_str(), bindpw, 1023);
+    if (pwlen) {
+      ldap_bindpw = bindpw;
+      boost::algorithm::trim(ldap_bindpw);
+      if (ldap_bindpw.back() == '\n') { ldap_bindpw.pop_back(); }
+    }
+  } 
+  
+  if (ldap_bindpw.empty() && !ldap_plaintext.empty()) {
+    ldap_bindpw = ldap_plaintext;
+    if (ldap_bindpw.back() == '\n') { ldap_bindpw.pop_back(); }
+  }
+
+  return ldap_bindpw;
+}
+
+vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
+
+  LDAP *ld;
+  LDAPMessage *result, *e;
+  BerElement *ber;
+  int version = LDAP_VERSION3;
+  int rc;
+
+  vector<uint64_t> err;
+
+  string ldap_uri = g_conf->get_val<string>("mds_idmap_ldap_uri");
+
+  rc = ldap_initialize(&ld, ldap_uri.c_str());
+  if (rc != LDAP_SUCCESS) {
+    ldout(cct, 1) << __func__ << " ldap_initialize failed during client session with uri " << ldap_uri 
+      << ". Ldap error: " << ldap_err2string(rc) << dendl;
+    is_valid = false;
+    return err;
+  }    
+
+  rc = ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &version);
+  if (rc != LDAP_SUCCESS) {
+    ldout(cct, 1) << __func__ << " ldap_set_option failed during client session with uri " << ldap_uri 
+      << ". Ldap error: " << ldap_err2string(rc) << dendl;
+    is_valid = false;
+    return err;
+  }    
+
+  string ldap_bind_dn = g_conf->get_val<string>("mds_idmap_ldap_binddn");
+  string ldap_bind_pw = get_ldap_bindpw();
+
+  if (ldap_bind_dn.empty()) {
+    rc = ldap_simple_bind_s(ld, NULL, NULL);
+    if (rc != LDAP_SUCCESS) {
+      ldout(cct, 1) << __func__ << " ldap_simple_bind_s failed during client session with uri " << ldap_uri 
+        << ". Ldap error: " << ldap_err2string(rc) << dendl;
+      is_valid = false;
+      return err;
+    }    
+  } else {
+    rc = ldap_simple_bind_s(ld, ldap_bind_dn.c_str(), ldap_bind_pw.c_str());
+    if (rc != LDAP_SUCCESS) {
+      ldout(cct, 1) << __func__ << " ldap_simple_bind_s failed during client session with uri " << ldap_uri 
+        << ". Ldap error: " << ldap_err2string(rc) << dendl;
+      is_valid = false;
+      return err;
+    }    
+  }
+
+  // Lookup for client uidNumber, gidNumber, and desired group search attribute
+  vector<uint64_t> ids;
+  uint64_t uidNumber, gidNumber;
+  string base_dn = g_conf->get_val<string>("mds_idmap_ldap_basedn");
+  string groupAttr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");  
+  
+  char* attrs[] = { "uidNumber", "gidNumber", const_cast<char*>(groupAttr.c_str()), NULL };
+  if (groupAttr == "dn") { attrs[2] = NULL; }
+
+  string searchAttr = g_conf->get_val<string>("mds_idmap_ldap_idattr");
+  string searchVal = name; 
+
+  string filter_str = "(";
+  filter_str += searchAttr;
+  filter_str += "=";
+  filter_str += searchVal;
+  filter_str += ")";
+  const char* filter = filter_str.c_str();
+
+  rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+  ldout(cct, 5) << __func__ << " results of ldap search using query \""<< filter << "\": " << ldap_err2string(rc) << dendl;
+  if (rc != LDAP_SUCCESS) {
+    ldout(cct, 1) << __func__ << " ldap_search_ext_s failed during client session." 
+      << " Did not find attribute " << searchAttr << " matching value " << searchVal
+      << ". Ldap error: " << ldap_err2string(rc) << dendl;
+    is_valid = false;
+    return err;
+  } 
+
+  e = ldap_first_entry(ld, result);
+
+  if (e != NULL) {
+    char* uidNumAttr = ldap_first_attribute(ld, e, &ber);
+    char* gidNumAttr = ldap_next_attribute(ld, e, ber);
+
+    if (uidNumAttr == NULL || gidNumAttr == NULL) {
+      ldout(cct, 1) << __func__ << " ldap search results error: No UID or GID Attribute found for client " 
+                    << name << ". Lookup failed." << dendl;
+      is_valid = false;
+      return err;
+    }
+
+    char** uidNumVals = ldap_get_values(ld, e, uidNumAttr);
+    char** gidNumVals = ldap_get_values(ld, e, gidNumAttr);
+
+    if (uidNumVals == NULL || gidNumVals == NULL) {
+      ldout(cct, 1) << __func__ << " ldap search results error: No UID or GID Values found for client " 
+                    << name << ". Lookup failed." << dendl;
+      is_valid = false;
+      return err;
+    }
+
+    uidNumber = uint64_t(atoi(uidNumVals[0])); ids.push_back(uidNumber);
+    gidNumber = uint64_t(atoi(gidNumVals[0])); ids.push_back(gidNumber);
+    if (uidNumber == 0 || gidNumber == 0) { is_valid = false; return err;}
+
+    if (groupAttr != "dn") {
+      char* grpSearchAttr = ldap_next_attribute(ld, e, ber);
+      char** grpSearchVals = ldap_get_values(ld, e, grpSearchAttr);
+      searchVal = grpSearchVals[0];
+      searchAttr = g_conf->get_val<string>("mds_idmap_ldap_memberattr");
+      ldap_value_free(grpSearchVals);
+    } else {
+      searchVal = ldap_get_dn(ld, e);
+      searchAttr = g_conf->get_val<string>("mds_idmap_ldap_memberattr");
+    }
+
+    // Free memory
+    ldap_value_free(uidNumVals);
+    ldap_value_free(gidNumVals);
+
+    if (ber != NULL) {
+      ber_free(ber, 0);
+    }
+
+    ldap_msgfree(result);
+    result = NULL; ber = NULL;
+
+    // Lookup for group GIDs
+    base_dn = g_conf->get_val<string>("mds_idmap_ldap_groupdn");
+
+    filter_str = "(";
+    filter_str += searchAttr;
+    filter_str += "=";
+    filter_str += searchVal;
+    filter_str += ")";
+    filter = filter_str.c_str();
+
+    char* gidAttrs[] = { "gidNumber", NULL };
+
+    rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, gidAttrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+    ldout(cct, 5) << __func__ << " results of ldap search using query \""<< filter << "\": " << ldap_err2string(rc) << dendl;
+    if (rc != LDAP_SUCCESS) {
+      ldout(cct, 1) << __func__ << " ldap_search_ext_s failed during client session." 
+        << " Did not find attribute " << searchAttr << " matching value " << searchVal
+        << ". Ldap error: " << ldap_err2string(rc) << dendl;
+      is_valid = false;
+      return err;
+    }
+
+    if (e == NULL) {
+      ldout(cct, 1) << __func__ << "ldap search results error: No groups' gids found for client " << name << "." << dendl;
+      is_valid = false;
+      return err;
+    }
+
+    for (e = ldap_first_entry( ld, result ); e != NULL; e = ldap_next_entry( ld, e )) {
+      char* gidGrpAttr = ldap_first_attribute(ld, e, &ber);
+      char** gidGrpVals = ldap_get_values(ld, e, gidGrpAttr);
+      for (size_t i = 0; gidGrpVals[i] != NULL; ++i) {
+        ids.push_back(uint64_t(atoi(gidGrpVals[i])));
+      }
+      ldap_value_free(gidGrpVals);
+    }
+
+    if (ber != NULL) {
+      ber_free( ber, 0 );
+    }
+
+    ldap_msgfree(result);
+
+    if (uidNumber == NULL || gidNumber == NULL || ids.size() <= 2) {
+      ldout(cct, 1) << __func__ << " ldap search results error: one or more of uid, gid, or group gids not found " << dendl;
+      is_valid = false;
+      return err;
+    }
+  } else {
+    ldout(cct, 1) << " ldap search results error: No LDAP entry found for client " << name << ". Lookup failed." << dendl;
+    is_valid = false;
+    return err;
+  }
+  
+  return ids;
+}
 
 ostream &operator<<(ostream &out, const MDSCapMatch &match)
 {
