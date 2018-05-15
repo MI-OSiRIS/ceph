@@ -16,6 +16,11 @@
 #ifndef MDS_AUTH_CAPS_H
 #define MDS_AUTH_CAPS_H
 
+#if defined(HAVE_OPENLDAP)
+#define LDAP_DEPRECATED 1
+#include "ldap.h"
+#endif
+
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -141,24 +146,29 @@ class MDSAuthCaps
 {
   CephContext *cct;
   std::vector<MDSCapGrant> grants;
+  bool idmap;
 
 public:
   explicit MDSAuthCaps(CephContext *cct_=NULL)
-    : cct(cct_) { }
+    : cct(cct_), idmap(false) { }
 
   // this ctor is used by spirit/phoenix; doesn't need cct.
-  explicit MDSAuthCaps(const std::vector<MDSCapGrant> &grants_)
-    : cct(NULL), grants(grants_) { }
+  explicit MDSAuthCaps(const std::vector<MDSCapGrant> &grants_, std::string idmap)
+    : cct(NULL), grants(grants_), idmap(false) { }
 
   void set_allow_all();
+  bool idmap_required();
   bool parse(CephContext *cct, std::string_view str, std::ostream *err);
-
   bool allow_all() const;
   bool is_capable(std::string_view inode_path,
 		  uid_t inode_uid, gid_t inode_gid, unsigned inode_mode,
 		  uid_t uid, gid_t gid, const vector<uint64_t> *caller_gid_list,
 		  unsigned mask, uid_t new_uid, gid_t new_gid) const;
   bool path_capable(std::string_view inode_path) const;
+
+  // idmap functions
+  vector<uint64_t> update_ids(const string& name, bool& is_valid);
+  vector<uint64_t> ldap_lookup(const string& name, bool& is_valid);
 
   friend std::ostream &operator<<(std::ostream &out, const MDSAuthCaps &cap);
 };
