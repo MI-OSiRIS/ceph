@@ -1355,6 +1355,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       s->info.auth_name = name;
       s->info.inst.addr = con->get_peer_addr();
       s->info.inst.name = n;
+
       dout(10) << " new session " << s << " for " << s->info.inst << " con " << con << dendl;
       con->set_priv(s);
       s->connection = con;
@@ -1381,6 +1382,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       // messenger.)
     }
 
+
     if (caps_info.allow_all) {
       // Flag for auth providers that don't provide cap strings
       s->auth_caps.set_allow_all();
@@ -1399,6 +1401,10 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 		       << "' does not parse: " << errstr.str();
           is_valid = false;
         }
+        //RM_TEST BEGIN
+        if ((s->info.auth_name.to_str()).empty()) { s->info.auth_name = name; }
+        if (s->auth_caps.idmap_required()) { s->update_idmap(is_valid); }
+        //RM_TEST END
       } catch (buffer::error& e) {
         // Assume legacy auth, defaults to:
         //  * permit all filesystem ops
@@ -1408,7 +1414,6 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       }
     }
   }
-
   return true;  // we made a decision (see is_valid)
 }
 
@@ -1445,3 +1450,4 @@ bool MDSDaemon::is_clean_shutdown()
     return true;
   }
 }
+
