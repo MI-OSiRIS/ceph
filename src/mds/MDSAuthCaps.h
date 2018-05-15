@@ -38,14 +38,14 @@ class CephContext;
 
 // what we can do
 struct MDSCapSpec {
-  bool read, write, any;
+  bool read, write, any, idmap;
 
   // True if the capability permits setting vxattrs (layout, quota, etc)
   bool set_vxattr;
 
-  MDSCapSpec() : read(false), write(false), any(false), set_vxattr(false) {}
-  MDSCapSpec(bool r, bool w, bool a, bool lop)
-    : read(r), write(w), any(a), set_vxattr(lop) {}
+  MDSCapSpec() : read(false), write(false), any(false), set_vxattr(false), idmap(false) {}
+  MDSCapSpec(bool r, bool w, bool a, bool lop, bool i)
+    : read(r), write(w), any(a), set_vxattr(lop), idmap(i) {}
 
   bool allow_all() const {
     return any;
@@ -63,6 +63,10 @@ struct MDSCapSpec {
 
   bool allows_set_vxattr() const {
     return set_vxattr;
+  }
+
+  bool allow_ldap() const {
+    return idmap;
   }
 };
 
