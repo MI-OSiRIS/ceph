@@ -311,6 +311,11 @@ bool MDSAuthCaps::idmap_required()
     return idmap; 
 }
 
+bool MDSAuthCaps::idmap_required() 
+{
+    return idmap; 
+}
+
 bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
 {
   // Special case for legacy caps
