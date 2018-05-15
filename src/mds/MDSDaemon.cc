@@ -524,6 +524,7 @@ int MDSDaemon::init()
   monc->renew_subs();
 
   mds_lock.Unlock();
+  is_ldap_available();
 
   // Set up admin socket before taking mds_lock, so that ordering
   // is consistent (later we take mds_lock within asok callbacks)
@@ -1230,6 +1231,23 @@ bool MDSDaemon::handle_core_message(Message *m)
   return true;
 }
 
+void MDSDaemon::is_ldap_available() {
+  LDAP *ld;
+  int rc;
+  string ldap_uri = g_conf->get_val<string>("mds_idmap_ldap_uri");
+
+  rc = ldap_initialize(&ld, ldap_uri.c_str());
+  if (rc != LDAP_SUCCESS) {
+    dout(1) << __func__ << " ldap_initialize failed on server startup with uri " << ldap_uri
+            <<  ". Ldap error: " << ldap_err2string(rc) << dendl;
+  }
+  rc = ldap_simple_bind_s(ld, NULL, NULL);
+  if (rc != LDAP_SUCCESS) {
+    dout(1) << __func__ << " ldap_simple_bind_s failed on server startup with uri " << ldap_uri 
+            <<  ". Ldap error: " << ldap_err2string(rc) << dendl;
+  }
+}
+
 void MDSDaemon::ms_handle_connect(Connection *con)
 {
 }
@@ -1355,6 +1373,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       s->info.auth_name = name;
       s->info.inst.addr = con->get_peer_addr();
       s->info.inst.name = n;
+
       dout(10) << " new session " << s << " for " << s->info.inst << " con " << con << dendl;
       con->set_priv(s);
       s->connection = con;
@@ -1381,6 +1400,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       // messenger.)
     }
 
+
     if (caps_info.allow_all) {
       // Flag for auth providers that don't provide cap strings
       s->auth_caps.set_allow_all();
@@ -1406,9 +1426,14 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         dout(1) << __func__ << ": cannot decode auth caps bl of length " << caps_info.caps.length() << dendl;
         is_valid = false;
       }
+
+      if ((s->info.auth_name.to_str()).empty())
+        s->info.auth_name = name;
+ 
+      if (s->auth_caps.idmap_required()) 
+        s->update_idmap(is_valid);
     }
   }
-
   return true;  // we made a decision (see is_valid)
 }
 
@@ -1445,3 +1470,4 @@ bool MDSDaemon::is_clean_shutdown()
     return true;
   }
 }
+
