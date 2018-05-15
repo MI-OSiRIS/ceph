@@ -417,6 +417,10 @@ void Server::handle_client_session(MClientSession *m)
     } else {
       dout(10) << "ignoring renewcaps on non open|stale session (" << session->get_state_name() << ")" << dendl;
     }
+    if (session->auth_caps.idmap_required()) {
+      bool is_valid = true;
+      session->update_idmap(is_valid);
+    }
     break;
     
   case CEPH_SESSION_REQUEST_CLOSE:
@@ -1622,9 +1626,6 @@ void Server::set_trace_dist(Session *session, MClientReply *reply,
   reply->set_trace(bl);
 }
 
-
-
-
 /***
  * process a client request
  * This function DOES put the passed message before returning
@@ -1663,6 +1664,19 @@ void Server::handle_client_request(MClientRequest *req)
       return;
     }
   }
+
+  // Update information if idmap lookup was performed
+  if (session->idmap_required()) {
+    std::vector<unsigned int> gid_vec = session->get_gid_list();
+    const gid_t* gid_list = &gid_vec[0];
+
+    req->set_caller_uid(session->get_client_uid());
+    req->set_caller_gid(session->get_client_gid());
+    req->set_gid_list(gid_vec.size(), gid_list);
+  }
+
+  dout(4) << "handle_client_request " << *req << dendl;
+
 
   // old mdsmap?
   if (req->get_mdsmap_epoch() < mds->mdsmap->get_epoch()) {
@@ -1737,6 +1751,7 @@ void Server::handle_client_request(MClientRequest *req)
 
   // register + dispatch
   MDRequestRef mdr = mdcache->request_start(req);
+
   if (!mdr.get())
     return;
 
@@ -1760,6 +1775,7 @@ void Server::handle_client_request(MClientRequest *req)
   }
 
   dispatch_client_request(mdr);
+
   return;
 }
 
@@ -4179,6 +4195,7 @@ void Server::handle_client_file_readlock(MDRequestRef& mdr)
 void Server::handle_client_setattr(MDRequestRef& mdr)
 {
   MClientRequest *req = mdr->client_request;
+
   set<SimpleLock*> rdlocks, wrlocks, xlocks;
   CInode *cur = rdlock_path_pin_ref(mdr, 0, rdlocks, true);
   if (!cur) return;
@@ -4307,6 +4324,7 @@ void Server::handle_client_setattr(MDRequestRef& mdr)
   if (xlocks.count(&cur->filelock) &&
       (cur->get_caps_wanted() & (CEPH_CAP_FILE_RD|CEPH_CAP_FILE_WR)))
     mds->mdlog->flush();
+
 }
 
 /* Takes responsibility for mdr */
