@@ -298,9 +298,13 @@ bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
 
   auto iter = str.begin();
   auto end = str.end();
+
   MDSCapParser<decltype(iter)> g;
 
   bool r = qi::phrase_parse(iter, end, g, ascii::space, *this);
+
+  lookup_reqd = (str.find("idmap") != std::string::npos);
+
   cct = c;  // set after parser self-assignment
   if (r && iter == end) {
     for (auto& grant : grants) {
