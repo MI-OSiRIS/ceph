@@ -38,14 +38,14 @@ class CephContext;
 
 // what we can do
 struct MDSCapSpec {
-  bool read, write, any, idmap;
+  bool read, write, any;
 
   // True if the capability permits setting vxattrs (layout, quota, etc)
   bool set_vxattr;
 
-  MDSCapSpec() : read(false), write(false), any(false), set_vxattr(false), idmap(false) {}
-  MDSCapSpec(bool r, bool w, bool a, bool lop, bool i)
-    : read(r), write(w), any(a), set_vxattr(lop), idmap(i) {}
+  MDSCapSpec() : read(false), write(false), any(false), set_vxattr(false) {}
+  MDSCapSpec(bool r, bool w, bool a, bool lop)
+    : read(r), write(w), any(a), set_vxattr(lop) {}
 
   bool allow_all() const {
     return any;
@@ -63,10 +63,6 @@ struct MDSCapSpec {
 
   bool allows_set_vxattr() const {
     return set_vxattr;
-  }
-
-  bool allow_ldap() const {
-    return idmap;
   }
 };
 
@@ -124,17 +120,18 @@ class MDSAuthCaps
 {
   CephContext *cct;
   std::vector<MDSCapGrant> grants;
-  bool lookup_required;
+  bool lookup_reqd;
 
 public:
   explicit MDSAuthCaps(CephContext *cct_=NULL)
-    : cct(cct_), lookup_required(false) { }
+    : cct(cct_), lookup_reqd(false) { }
 
   // this ctor is used by spirit/phoenix; doesn't need cct.
   explicit MDSAuthCaps(const std::vector<MDSCapGrant> &grants_, std::string idmap)
-    : cct(NULL), grants(grants_), lookup_required(idmap == "idmap") { }
+    : cct(NULL), grants(grants_), lookup_reqd(idmap == "idmap") { }
 
   void set_allow_all();
+  bool lookup_required();
   bool parse(CephContext *cct, boost::string_view str, std::ostream *err);
 
   bool allow_all() const;

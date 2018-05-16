@@ -1345,6 +1345,12 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       // messenger.)
     }
 
+    if (caps_info.lookup_required()) {
+        cout << "lookup required";
+    } else {
+        cout << "lookup not required";
+    }
+
     if (caps_info.allow_all) {
       // Flag for auth providers that don't provide cap strings
       s->auth_caps.set_allow_all();

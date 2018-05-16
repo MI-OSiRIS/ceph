@@ -59,8 +59,6 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
       lexeme[lit("'") >> *(char_ - '\'') >> '\''];
     unquoted_path %= +char_("a-zA-Z0-9_./-");
 
-    ldap_lookup = *(spaces >> lit("idmap"));
-    
     // match := [path=<path>] [uid=<uid> [gids=<gid>[,<gid>...]]
     path %= (spaces >> lit("path") >> lit('=') >> (quoted_path | unquoted_path));
     uid %= (spaces >> lit("uid") >> lit('=') >> uint_);
@@ -73,21 +71,13 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
 
     // capspec = * | r[w]
     capspec = spaces >> (
-        lit("* idmap")[_val = MDSCapSpec(true, true, true, true, true)]
+        lit("*")[_val = MDSCapSpec(true, true, true, true)]
         |
-        (lit("rwp idmap"))[_val = MDSCapSpec(true, true, false, true, true)]
-        |        
-        (lit("rw idmap"))[_val = MDSCapSpec(true, true, false, false, true)]
+        (lit("rwp"))[_val = MDSCapSpec(true, true, false, true)]
         |
-        (lit("r idmap"))[_val = MDSCapSpec(true, false, false, false, true)]      
+        (lit("rw"))[_val = MDSCapSpec(true, true, false, false)]
         |
-        (lit("*"))[_val = MDSCapSpec(true, true, true, true, false)]
-        |
-        (lit("rwp"))[_val = MDSCapSpec(true, true, false, true, false)]
-        |
-        (lit("rw"))[_val = MDSCapSpec(true, true, false, false, false)]
-        |
-        (lit("r"))[_val = MDSCapSpec(true, false, false, false, false)]
+        (lit("r"))[_val = MDSCapSpec(true, false, false, false)]
         );
 
     idmap = *(spaces >> lit("idmap"));
@@ -107,7 +97,6 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
   qi::rule<Iterator, MDSCapMatch()> match;
   qi::rule<Iterator, MDSCapGrant()> grant;
   qi::rule<Iterator, std::vector<MDSCapGrant>()> grants;
-  qi::rule<Iterator, bool()> ldap_lookup;
   qi::rule<Iterator, MDSAuthCaps()> mdscaps;
 };
 
@@ -289,8 +278,13 @@ void MDSAuthCaps::set_allow_all()
 {
     grants.clear();
     grants.push_back(MDSCapGrant(
-                       MDSCapSpec(true, true, true, true, true),
+                       MDSCapSpec(true, true, true, true),
                        MDSCapMatch()));
+}
+
+bool MDSAuthCaps::lookup_required() 
+{
+    return lookup_reqd; 
 }
 
 bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
@@ -298,7 +292,7 @@ bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
   // Special case for legacy caps
   if (str == "allow") {
     grants.clear();
-    grants.push_back(MDSCapGrant(MDSCapSpec(true, true, false, true, false), MDSCapMatch()));
+    grants.push_back(MDSCapGrant(MDSCapSpec(true, true, false, true), MDSCapMatch()));
     return true;
   }
 
