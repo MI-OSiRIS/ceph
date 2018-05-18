@@ -1375,26 +1375,79 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       }
     }
 
-    // TEST CODE
 
-    #define LDAP_SERVER "ldaps://ldap.osris.org"
-    LDAP *ld;
-    char bind_dn[100];
-    LDAPMessage *result, *e;
-    char *dn;
-    int has_value;
+
+
+
+
+
+
+
+
+
+    // RM_TEST CODE
 
     if (s->auth_caps.lookup_required()) {
-      dout(1) << __func__ << " Performing LDAP Lookup for " << s->auth_caps << dendl;
-      if (ldap_initialize( &ld, LDAP_SERVER ) ) {
-        dout(1) << __func__ << " Successfully contacted LDAP server " << dendl;
+
+      #define LDAP_SERVER "ldaps://ldap.osris.org"
+      #define LDAP_PORT 636
+      #define LDAP_HOST "ldap.osris.org"
+      #define LDAP_SCOPE LDAP_SCOPE_SUBTREE
+
+      LDAP *ld;
+      int  auth_method    = LDAP_AUTH_SIMPLE;
+      int  version        = LDAP_VERSION3;
+      char *ldap_host     = "ldap.osris.org";
+      char *root_dn       = "ou=People,dc=osris,dc=org";
+      //char *root_pw       = "secret"; // For binding
+
+      dout(1) << __func__ << " Performing LDAP Lookup for " << name << dendl;
+
+      /*if ((ld = ldap_init(LDAP_HOST, LDAP_PORT)) == NULL ) {
+        dout(1) << __func__ << " ldap_init failure" << dendl;
+        exit( EXIT_FAILURE ); 
+      } else {
+        dout(1) << __func__ << " ldap_init success" << dendl;
+      }*/
+
+      if ((ld = ldap_open(LDAP_HOST, LDAP_PORT)) == NULL ) {
+        dout(1) << __func__ << " ldap_open failure" << dendl;
+        exit( EXIT_FAILURE );
+      } else {
+        dout(1) << __func__ << " ldap_open success" << dendl;
       }
-      //if ( (dn = ldap_get_dn( ld, e )) != NULL) {
-        
-      //}
+
+      LDAPMessage *res;
+      LDAPControl **serverctrls;
+      int rc;
+
+      // If binding is desired, uncomment this & set password above
+      /*if (ldap_bind_s(ld, root_dn, root_pw, auth_method) != LDAP_SUCCESS ) {
+        ldap_perror( ld, "ldap_bind" );
+        exit( EXIT_FAILURE );
+      }*/
+
+      #include <sstream>
+      stringstream filter_strm;
+      string test_filter = "(cn=Ryan David Marshall)";
+      filter_strm << test_filter;       //"voPersonApplicationUID;app-ceph=" << name;
+      const char* filter = (filter_strm.str()).c_str();
+
+      dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
+
+      rc = ldap_search_ext_s( ld, root_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &res );
+      dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
     } 
-    // TEST CODE END
+    // RM_TEST CODE END
   }
+
+
+
+
+
+
+
+
 
   return true;  // we made a decision (see is_valid)
 }
