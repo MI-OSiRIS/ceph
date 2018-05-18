@@ -1375,9 +1375,25 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       }
     }
 
+    // TEST CODE
+
+    #define LDAP_SERVER "ldaps://ldap.osris.org"
+    LDAP *ld;
+    char bind_dn[100];
+    LDAPMessage *result, *e;
+    char *dn;
+    int has_value;
+
     if (s->auth_caps.lookup_required()) {
-        dout(1) << __func__ << " Performing LDAP Lookup for " << s->auth_caps << dendl;
+      dout(1) << __func__ << " Performing LDAP Lookup for " << s->auth_caps << dendl;
+      if (ldap_initialize( &ld, LDAP_SERVER ) ) {
+        dout(1) << __func__ << " Successfully contacted LDAP server " << dendl;
+      }
+      //if ( (dn = ldap_get_dn( ld, e )) != NULL) {
+        
+      //}
     } 
+    // TEST CODE END
   }
 
   return true;  // we made a decision (see is_valid)

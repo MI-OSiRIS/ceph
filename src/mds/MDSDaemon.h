@@ -15,6 +15,11 @@
 #ifndef CEPH_MDS_H
 #define CEPH_MDS_H
 
+#if defined(HAVE_OPENLDAP)
+#define LDAP_DEPRECATED 1
+#include "ldap.h"
+#endif
+
 #include <boost/utility/string_view.hpp>
 
 #include "common/LogClient.h"
