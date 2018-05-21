@@ -1398,31 +1398,26 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       int  auth_method    = LDAP_AUTH_SIMPLE;
       int  version        = LDAP_VERSION3;
       char *ldap_host     = "ldap.osris.org";
-      char *root_dn       = "ou=People,dc=osris,dc=org";
-      //char *root_pw       = "secret"; // For binding
+      char *base_dn       = "ou=People,dc=osris,dc=org";
+      //char *root_pw       = "secret".c_str(); // For binding
 
       dout(1) << __func__ << " Performing LDAP Lookup for " << name << dendl;
 
-      /*if ((ld = ldap_init(LDAP_HOST, LDAP_PORT)) == NULL ) {
+      // Not sure if we want init, open, or initialize
+      if ((ld = ldap_init(LDAP_HOST, LDAP_PORT)) == NULL ) {
         dout(1) << __func__ << " ldap_init failure" << dendl;
         exit( EXIT_FAILURE ); 
       } else {
         dout(1) << __func__ << " ldap_init success" << dendl;
-      }*/
-
-      if ((ld = ldap_open(LDAP_HOST, LDAP_PORT)) == NULL ) {
-        dout(1) << __func__ << " ldap_open failure" << dendl;
-        exit( EXIT_FAILURE );
-      } else {
-        dout(1) << __func__ << " ldap_open success" << dendl;
       }
 
       LDAPMessage *res;
       LDAPControl **serverctrls;
+      timeval timeout; timeout.tv_sec = 10; timeout.tv_usec = 0;
       int rc;
 
       // If binding is desired, uncomment this & set password above
-      /*if (ldap_bind_s(ld, root_dn, root_pw, auth_method) != LDAP_SUCCESS ) {
+      /*if (ldap_bind_s(ld, base_dn, root_pw, auth_method) != LDAP_SUCCESS ) {
         ldap_perror( ld, "ldap_bind" );
         exit( EXIT_FAILURE );
       }*/
@@ -1435,7 +1430,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 
       dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
 
-      rc = ldap_search_ext_s( ld, root_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &res );
+      rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &res );
       dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
     } 
     // RM_TEST CODE END
