@@ -1,4 +1,3 @@
-
 // -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
@@ -1375,64 +1374,95 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       }
     }
 
-
-
-
-
-
-
-
-
-
-
     // RM_TEST CODE
 
     if (s->auth_caps.lookup_required()) {
 
+      #include <sstream>
+
       #define LDAP_SERVER "ldaps://ldap.osris.org"
-      #define LDAP_PORT 636
-      #define LDAP_HOST "ldap.osris.org"
+      #define LDAP_HOST "ldap.osris.org:389"          //"um-ldap-test01-be.osris.org:389"   //"ldap.osris.org:636"
       #define LDAP_SCOPE LDAP_SCOPE_SUBTREE
 
       LDAP *ld;
-      int  auth_method    = LDAP_AUTH_SIMPLE;
-      int  version        = LDAP_VERSION3;
-      char *ldap_host     = "ldap.osris.org";
-      char *base_dn       = "ou=People,dc=osris,dc=org";
-      //char *root_pw       = "secret".c_str(); // For binding
+      int  auth_method            = LDAP_AUTH_SIMPLE;
+      int  version                = LDAP_VERSION3;
+      char *base_dn               = "ou=People,dc=osris,dc=org";
+      //char *root_pw               = "secret"; // For binding
+      
+      LDAPMessage *result, *e;
+      LDAPControl **serverctrls;
+      timeval timeout; timeout.tv_sec = 10; timeout.tv_usec = 0;
+      BerElement *ber;
+      char* a;
+      char** vals;
+      int rc;
 
       dout(1) << __func__ << " Performing LDAP Lookup for " << name << dendl;
 
-      // Not sure if we want init, open, or initialize
-      if ((ld = ldap_init(LDAP_HOST, LDAP_PORT)) == NULL ) {
-        dout(1) << __func__ << " ldap_init failure" << dendl;
+      if ((ld = ldap_open(LDAP_HOST, LDAP_PORT)) == NULL ) {
+        dout(1) << __func__ << " ldap_open failed. " << dendl;
         exit( EXIT_FAILURE ); 
-      } else {
-        dout(1) << __func__ << " ldap_init success" << dendl;
+      }
+      
+      if ( ldap_set_option( ld, LDAP_OPT_PROTOCOL_VERSION, &version ) != LDAP_SUCCESS) {
+        dout(1) << __func__ << " ldap_set_option failed: version not set. " << dendl;
       }
 
-      LDAPMessage *res;
-      LDAPControl **serverctrls;
-      timeval timeout; timeout.tv_sec = 10; timeout.tv_usec = 0;
-      int rc;
+      if ( ldap_simple_bind_s( ld, NULL, NULL ) != LDAP_SUCCESS) {
+        dout(1) << __func__ << " ldap_simple_bind_s failed. " << dendl;
+      }
 
       // If binding is desired, uncomment this & set password above
       /*if (ldap_bind_s(ld, base_dn, root_pw, auth_method) != LDAP_SUCCESS ) {
-        ldap_perror( ld, "ldap_bind" );
+        dout(1) << __func__ << " ldap_bind_s failed. " << dendl;
         exit( EXIT_FAILURE );
       }*/
 
-      #include <sstream>
+
+      string filter_test = "(voPersonApplicationUID;app-ceph=client.rmarshalltest)";         //"(cn=Ryan David Marshall)";
       stringstream filter_strm;
-      string test_filter = "(cn=Ryan David Marshall)";
-      filter_strm << test_filter;       //"voPersonApplicationUID;app-ceph=" << name;
+      filter_strm << filter_test; //"(voPersonApplicationUID;app-ceph=" << name << ')';
       const char* filter = (filter_strm.str()).c_str();
 
       dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
 
-      rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &res );
+      rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
       dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
+
+      e = ldap_first_entry( ld, result ); 
+      if ( e != NULL ) { 
+
+        /* Iterate through each attribute in the entry. */ 
+        for ( a = ldap_first_attribute( ld, e, &ber ); a != NULL; a = ldap_next_attribute( ld, e, ber ) ) { 
+
+          dout(1) << __func__ << ' ' << a << dendl;
+
+          /* For each attribute, print the attribute name and values. */ 
+          if ((vals = ldap_get_values( ld, e, a )) != NULL ) { 
+            for (size_t i = 0; vals[i] != NULL; i++ ) { 
+              dout(1) << __func__ << ' ' << a << ": " << vals[i] << dendl; 
+            } 
+            ldap_value_free( vals ); 
+          } else {
+            dout(1) << __func__ << " No values for attribute " << a << dendl;
+          }
+        ldap_memfree( a ); 
+        } 
+        if ( ber != NULL ) { 
+          ber_free( ber, 0 ); 
+        } 
+      } else {
+        dout(1) << __func__ << " First entry is NULL " << dendl;
+      }
+      ldap_msgfree( result ); 
     } 
+
+
+
+
+
+
     // RM_TEST CODE END
   }
 
