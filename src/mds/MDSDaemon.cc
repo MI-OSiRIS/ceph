@@ -1419,16 +1419,14 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         exit( EXIT_FAILURE );
       }*/
 
-
-      string filter_test = "(voPersonApplicationUID;app-ceph=client.rmarshalltest)";         //"(cn=Ryan David Marshall)";
-      stringstream filter_strm;
-      filter_strm << filter_test; //"(voPersonApplicationUID;app-ceph=" << name << ')';
-      const char* filter = (filter_strm.str()).c_str();
+      string filter_str = "(voPersonApplicationUID;app-ceph=" + name.to_str() + ')';
+      const char* filter = filter_str.c_str();
 
       dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
 
       rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
       dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
+      dout(1) << __func__ << " Return code: " << rc << dendl;
 
       e = ldap_first_entry( ld, result ); 
       if ( e != NULL ) { 
