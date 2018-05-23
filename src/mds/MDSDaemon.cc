@@ -1378,24 +1378,17 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 
     if (s->auth_caps.lookup_required()) {
 
-      #include <sstream>
-
-      #define LDAP_SERVER "ldaps://ldap.osris.org"
-      #define LDAP_HOST "ldap.osris.org:389"          //"um-ldap-test01-be.osris.org:389"   //"ldap.osris.org:636"
+      #define LDAP_HOST "ldap.osris.org:389"
       #define LDAP_SCOPE LDAP_SCOPE_SUBTREE
 
       LDAP *ld;
-      int  auth_method            = LDAP_AUTH_SIMPLE;
       int  version                = LDAP_VERSION3;
-      char *base_dn               = "ou=People,dc=osris,dc=org";
+      //int  auth_method            = LDAP_AUTH_SIMPLE;
       //char *root_pw               = "secret"; // For binding
       
       LDAPMessage *result, *e;
-      LDAPControl **serverctrls;
       timeval timeout; timeout.tv_sec = 10; timeout.tv_usec = 0;
       BerElement *ber;
-      char* a;
-      char** vals;
       int rc;
 
       dout(1) << __func__ << " Performing LDAP Lookup for " << name << dendl;
@@ -1413,40 +1406,43 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         dout(1) << __func__ << " ldap_simple_bind_s failed. " << dendl;
       }
 
-      // If binding is desired, uncomment this & set password above
-      /*if (ldap_bind_s(ld, base_dn, root_pw, auth_method) != LDAP_SUCCESS ) {
-        dout(1) << __func__ << " ldap_bind_s failed. " << dendl;
-        exit( EXIT_FAILURE );
-      }*/
+
+
+      // Lookup for client uid, uidNumber, and gidNumber
+
+      char *base_dn = "ou=People,dc=osris,dc=org";
+      char* attrs[3]; attrs[0] = "uidNumber"; attrs[1] = "gidNumber"; attrs[2] = "uid"; attrs[3] = NULL;
 
       string filter_str = "(voPersonApplicationUID;app-ceph=" + name.to_str() + ')';
       const char* filter = filter_str.c_str();
 
       dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
 
-      rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, NULL, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
+      rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, attrs, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
       dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
-      dout(1) << __func__ << " Return code: " << rc << dendl;
+
+      int uidNumber, gidNumber;
+      string uid;
 
       e = ldap_first_entry( ld, result ); 
       if ( e != NULL ) { 
 
-        /* Iterate through each attribute in the entry. */ 
-        for ( a = ldap_first_attribute( ld, e, &ber ); a != NULL; a = ldap_next_attribute( ld, e, ber ) ) { 
+        char* uidNumAttr = ldap_first_attribute( ld, e, &ber );
+        char* gidNumAttr = ldap_next_attribute( ld, e, ber );
+        char* uidAttr = ldap_next_attribute( ld, e, ber );
 
-          dout(1) << __func__ << ' ' << a << dendl;
+        char** uidNumVals = ldap_get_values( ld, e, uidNumAttr );
+        char** gidNumVals = ldap_get_values( ld, e, gidNumAttr );
+        char** uidVals = ldap_get_values( ld, e, uidAttr );
 
-          /* For each attribute, print the attribute name and values. */ 
-          if ((vals = ldap_get_values( ld, e, a )) != NULL ) { 
-            for (size_t i = 0; vals[i] != NULL; i++ ) { 
-              dout(1) << __func__ << ' ' << a << ": " << vals[i] << dendl; 
-            } 
-            ldap_value_free( vals ); 
-          } else {
-            dout(1) << __func__ << " No values for attribute " << a << dendl;
-          }
-        ldap_memfree( a ); 
-        } 
+        uidNumber = atoi(uidNumVals[0]);
+        gidNumber = atoi(gidNumVals[0]);
+        uid = string(uidVals[0]);
+  
+        ldap_value_free( uidNumVals ); 
+        ldap_value_free( gidNumVals ); 
+        ldap_value_free( uidVals ); 
+
         if ( ber != NULL ) { 
           ber_free( ber, 0 ); 
         } 
@@ -1454,6 +1450,45 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         dout(1) << __func__ << " First entry is NULL " << dendl;
       }
       ldap_msgfree( result ); 
+
+
+
+      // Lookup for group GIDs
+
+      base_dn = "ou=Groups,dc=osris,dc=org";
+      attrs[0] = "gidNumber"; attrs[1] = NULL;
+
+      filter_str = "(uid=" + uid + ')';
+      filter = filter_str.c_str();
+
+      result = NULL; ber = NULL;
+
+      dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
+
+      rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, attrs, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
+      dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
+
+      vector<int> ids; ids.push_back(uidNumber); ids.push_back(gidNumber);
+
+      if ( (e = ldap_first_entry( ld, result )) == NULL) {
+        dout(1) << __func__ << " FIRST ENTRY NULL." << dendl;
+      }
+
+      for (e = ldap_first_entry( ld, result ); e != NULL; e = ldap_next_entry( ld, e )) {
+
+        char* groupGIDAttr = ldap_first_attribute( ld, e, &ber );
+        char** vals = ldap_get_values( ld, e, groupGIDAttr );
+        for (size_t i = 0; vals[i] != NULL; ++i) {
+          dout(1) << __func__ << ' ' << name << " is a member of groups " << vals[i] << dendl;  
+        }        
+
+        ldap_value_free(vals);
+      }
+      if ( ber != NULL ) {
+        ber_free( ber, 0 );
+      }
+
+      ldap_msgfree( result );
     } 
 
 
