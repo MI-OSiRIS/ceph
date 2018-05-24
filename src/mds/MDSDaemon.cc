@@ -1376,7 +1376,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 
     // RM_TEST CODE
 
-    if (s->auth_caps.lookup_required()) {
+    if (s->auth_caps.lookup_required() && (!s->ldap_lookup_done() || s->ldap_update_needed())) {
 
       #define LDAP_HOST "ldap.osris.org:389"
       #define LDAP_SCOPE LDAP_SCOPE_SUBTREE
@@ -1416,12 +1416,9 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       string filter_str = "(voPersonApplicationUID;app-ceph=" + name.to_str() + ')';
       const char* filter = filter_str.c_str();
 
-      dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
-
       rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, attrs, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
-      dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
 
-      vector<int> ids;
+      vector<unsigned int> ids;
       int uidNumber, gidNumber;
       char* dn;
 
@@ -1438,8 +1435,8 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         char** uidNumVals = ldap_get_values( ld, e, uidNumAttr );
         char** gidNumVals = ldap_get_values( ld, e, gidNumAttr );
 
-        uidNumber = atoi(uidNumVals[0]); ids.push_back(uidNumber);
-        gidNumber = atoi(gidNumVals[0]); ids.push_back(gidNumber);
+        uidNumber = unsigned(atoi(uidNumVals[0])); ids.push_back(uidNumber);
+        gidNumber = unsigned(atoi(gidNumVals[0])); ids.push_back(gidNumber);
   
         ldap_value_free( uidNumVals ); 
         ldap_value_free( gidNumVals ); 
@@ -1464,10 +1461,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 
       result = NULL; ber = NULL;
 
-      dout(1) << __func__ << " querying LDAP for: " << filter << dendl;
-
       rc = ldap_search_ext_s( ld, base_dn, LDAP_SCOPE, filter, attrs, 0, NULL, NULL, &timeout, LDAP_NO_LIMIT, &result );
-      dout(1) << __func__ << " Search results: " << ldap_err2string(rc) << dendl;
 
       for (e = ldap_first_entry( ld, result ); e != NULL; e = ldap_next_entry( ld, e )) {
 
@@ -1484,13 +1478,10 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       }
 
       ldap_msgfree( result );
-
-
+    
+      s->set_ldap_ids(ids);
+      s->ldap_updated();
     } 
-
-
-
-
 
 
     // RM_TEST CODE END

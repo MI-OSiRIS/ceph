@@ -1618,16 +1618,7 @@ void Server::handle_client_request(MClientRequest *req)
     }
   }
 
-  // Update information if ldap lookup was performed
-  if (session->ldap_lookup_done()) {
-    
-    std::vector<unsigned int> gid_vec = session->get_gid_list();
-    const gid_t* gid_list = &gid_vec[0];
-
-    req->set_caller_uid(session->get_client_uid());
-    req->set_caller_gid(session->get_client_gid());
-    req->set_gid_list(gid_vec.size(), gid_list);    
-  }
+  
 
   // old mdsmap?
   if (req->get_mdsmap_epoch() < mds->mdsmap->get_epoch()) {

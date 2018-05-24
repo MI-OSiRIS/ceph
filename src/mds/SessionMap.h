@@ -89,6 +89,8 @@ private:
   uint64_t state_seq;
   int importing_count;
   friend class SessionMap;
+  std::vector<unsigned int> ldap_ids;
+  bool ldap_update_reqd;
 
   // Human (friendly) name is soft state generated from client metadata
   void _update_human_name();
@@ -98,7 +100,36 @@ private:
   // that appropriate mark_dirty calls follow.
   std::deque<version_t> projected;
 
+public: // LDAP functions
 
+  void ldap_updated() {
+    ldap_update_reqd = false;
+  }
+
+  bool ldap_lookup_done() {
+    return !ldap_ids.empty();
+  }
+ 
+  bool ldap_update_needed() {
+    return ldap_update_reqd;
+  }
+
+  unsigned int get_client_uid() {
+    return ldap_ids[0];
+  }
+
+  unsigned int get_client_gid() {
+    return ldap_ids[1];
+  }
+  
+  std::vector<unsigned int> get_gid_list() {
+    std::vector<unsigned int> gid_list(ldap_ids.begin()+2, ldap_ids.end());
+    return gid_list;
+  } 
+
+  void set_ldap_ids(std::vector<unsigned int>& ids) {
+    ldap_ids = ids;
+  }
 
 public:
 
@@ -328,7 +359,8 @@ public:
     lease_seq(0),
     completed_requests_dirty(false),
     num_trim_flushes_warnings(0),
-    num_trim_requests_warnings(0) { }
+    num_trim_requests_warnings(0),
+    ldap_update_reqd(false) { }
   ~Session() override {
     assert(!item_session_list.is_on_list());
     while (!preopen_out_queue.empty()) {
