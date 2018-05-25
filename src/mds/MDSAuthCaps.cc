@@ -282,9 +282,9 @@ void MDSAuthCaps::set_allow_all()
                        MDSCapMatch()));
 }
 
-bool MDSAuthCaps::lookup_required() 
+bool MDSAuthCaps::idmap_required() 
 {
-    return lookup_reqd; 
+    return idmap_reqd; 
 }
 
 bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
@@ -303,7 +303,7 @@ bool MDSAuthCaps::parse(CephContext *c, boost::string_view str, ostream *err)
 
   bool r = qi::phrase_parse(iter, end, g, ascii::space, *this);
 
-  lookup_reqd = (str.find("idmap") != std::string::npos);
+  idmap_reqd = (str.find("idmap") != std::string::npos);
 
   cct = c;  // set after parser self-assignment
   if (r && iter == end) {

@@ -120,18 +120,18 @@ class MDSAuthCaps
 {
   CephContext *cct;
   std::vector<MDSCapGrant> grants;
-  bool lookup_reqd;
+  bool idmap_reqd;
 
 public:
   explicit MDSAuthCaps(CephContext *cct_=NULL)
-    : cct(cct_), lookup_reqd(false) { }
+    : cct(cct_), idmap_reqd(false) { }
 
   // this ctor is used by spirit/phoenix; doesn't need cct.
   explicit MDSAuthCaps(const std::vector<MDSCapGrant> &grants_, std::string idmap)
-    : cct(NULL), grants(grants_), lookup_reqd(idmap == "idmap") { }
+    : cct(NULL), grants(grants_), idmap_reqd(false) { }
 
   void set_allow_all();
-  bool lookup_required();
+  bool idmap_required();
   bool parse(CephContext *cct, boost::string_view str, std::ostream *err);
 
   bool allow_all() const;
