@@ -303,7 +303,7 @@ std::vector<Option> get_global_options() {
 
     // restapi
     Option("restapi_log_level", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_description("default set by python code"),
+    .set_description("default set by  python code"),
 
     Option("restapi_base_url", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_description("default set by python code"),
@@ -5878,6 +5878,50 @@ static std::vector<Option> get_rbd_mirror_options() {
 
 std::vector<Option> get_mds_options() {
   return std::vector<Option>({
+    // RM_TEST BEGIN
+
+    Option("mds_idmap", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description(""),
+
+    Option("mds_idmap_backend", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("ldap")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_uri", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_binddn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_bindpw", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_idattr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("voPersonApplicationUID;app-ceph")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_groupattr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("dn")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_basedn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_groupdn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("")
+    .set_description(""),
+
+    Option("mds_idmap_ldap_member_attr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("uniqueMember")
+    .set_description(""),
+
+    // RM_TEST END
+
     Option("mds_data", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("/var/lib/ceph/mds/$cluster-$id")
     .set_description(""),

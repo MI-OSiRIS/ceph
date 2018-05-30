@@ -347,6 +347,7 @@ const char** MDSDaemon::get_tracked_conf_keys() const
     "mds_op_history_size", "mds_op_history_duration",
     "mds_enable_op_tracker",
     "mds_log_pause",
+    "mds_idmap_backend",
     // clog & admin clog
     "clog_to_monitors",
     "clog_to_syslog",
