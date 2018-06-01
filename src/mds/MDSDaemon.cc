@@ -347,7 +347,6 @@ const char** MDSDaemon::get_tracked_conf_keys() const
     "mds_op_history_size", "mds_op_history_duration",
     "mds_enable_op_tracker",
     "mds_log_pause",
-    "mds_idmap_backend",
     // clog & admin clog
     "clog_to_monitors",
     "clog_to_syslog",
@@ -1376,8 +1375,9 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
     }
 
     // RM_TEST CODE
+    bool idmap_possible = g_conf->get_val<bool>("mds_idmap");
 
-    if (s->auth_caps.idmap_required() || s->idmap_update_required()) {
+    if (idmap_possible && (s->auth_caps.idmap_required() || s->idmap_update_required())) {
 
       #define LDAP_HOST "ldap.osris.org:389"
       #define LDAP_SCOPE LDAP_SCOPE_SUBTREE
@@ -1390,122 +1390,140 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       int version = LDAP_VERSION3;
       int rc;
 
-      dout(1) << __func__ << " performing idmap lookup for " << name << dendl;
+      string backend = g_conf->get_val<string>("mds_idmap_backend");
 
-      if ((ld = ldap_open(LDAP_HOST, LDAP_PORT)) == NULL) {
-        dout(1) << __func__ << " ldap_open failed. " << dendl;
-        is_valid = false;
-      }
+      if (backend == "ldap") {
+      
+        dout(1) << __func__ << " performing idmap lookup for " << name << dendl;
 
-      if (ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &version) != LDAP_SUCCESS) {
-        dout(1) << __func__ << " ldap_set_option failed: version not set. " << dendl;
-        is_valid = false;
-      }
-
-      if (ldap_simple_bind_s(ld, NULL, NULL) != LDAP_SUCCESS) {
-        dout(1) << __func__ << " ldap_simple_bind_s failed. " << dendl;
-        is_valid = false;
-      }
-
-      // Lookup for client dn, uidNumber, and gidNumber
-
-      vector<unsigned int> ids;
-      int uidNumber, gidNumber;
-      char* dn;
-
-      char* base_dn = "ou=People,dc=osris,dc=org"; // FIXME
-      char* attrs[2]; attrs[0] = "uidNumber"; attrs[1] = "gidNumber"; attrs[2] = NULL;
-
-      string filter_str = "(";
-      filter_str += "voPersonApplicationUID;app-ceph";
-      filter_str += "=";
-      filter_str += name.to_str();
-      filter_str += ")";
-      const char* filter = filter_str.c_str();
-
-      rc = ldap_search_ext_s(ld, base_dn, LDAP_SCOPE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
-      dout(1) << __func__ << " results of client ldap search: " << ldap_err2string(rc) << dendl;
-
-      e = ldap_first_entry(ld, result);
-
-      if (e != NULL) { 
-
-        char* uidNumAttr = ldap_first_attribute(ld, e, &ber);
-        char* gidNumAttr = ldap_next_attribute(ld, e, ber);
-
-        if (uidNumAttr == NULL || gidNumAttr == NULL) {
-          dout(1) << __func__ << " No UID or GID Attribute found for client " << name << ". Lookup failed." << dendl;
+        string ldap_uri = (g_conf->get_val<string>("mds_idmap_ldap_uri"));
+        if (ldap_initialize(&ld, ldap_uri.c_str()) != LDAP_SUCCESS) {
+          dout(1) << __func__ << " ldap_initialize failed. " << dendl;
           is_valid = false;
         }
 
-        char** uidNumVals = ldap_get_values(ld, e, uidNumAttr);
-        char** gidNumVals = ldap_get_values(ld, e, gidNumAttr);
-
-        if (uidNumVals == NULL || gidNumVals == NULL) {
-          //dout(1) << __func__ << " No UID or GID Values found for client " << name << ". Lookup failed." << dendl;
+        if (ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &version) != LDAP_SUCCESS) {
+          dout(1) << __func__ << " ldap_set_option failed: version not set. " << dendl;
           is_valid = false;
         }
 
-        uidNumber = unsigned(atoi(uidNumVals[0])); ids.push_back(uidNumber);
-        gidNumber = unsigned(atoi(gidNumVals[0])); ids.push_back(gidNumber);
-        dn = ldap_get_dn(ld, e);
+        string ldap_bind_dn = g_conf->get_val<string>("mds_idmap_ldap_binddn");
+        string ldap_bind_pw = g_conf->get_val<string>("mds_idmap_ldap_bindpw");
 
-        // Free memory  
-        ldap_value_free(uidNumVals); 
-        ldap_value_free(gidNumVals);
-
-        if (ber != NULL) { 
-          ber_free(ber, 0); 
-        } 
-
-        ldap_msgfree(result); 
-        result = NULL; ber = NULL;
-
-        // Lookup for group GIDs
-        base_dn = "ou=Groups,dc=osris,dc=org";
-        attrs[0] = "gidNumber"; attrs[1] = NULL;
-
-        filter_str = "(";
-        filter_str += "uniqueMember";
-        filter_str += "=";
-        filter_str += string(dn);
-        filter_str += ")";
-        filter = filter_str.c_str();
-
-        rc = ldap_search_ext_s(ld, base_dn, LDAP_SCOPE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
-        dout(1) << __func__ << " results of group ldap search: " << ldap_err2string(rc) << dendl;
-
-        if (e == NULL) {
-          dout(1) << "No groups gids found for client " << name << ". Lookup failed." << dendl;
-          is_valid = false;
-        }
-
-        for (e = ldap_first_entry( ld, result ); e != NULL; e = ldap_next_entry( ld, e )) {
-
-          char* gidGrpAttr = ldap_first_attribute(ld, e, &ber);
-          char** gidGrpVals = ldap_get_values(ld, e, gidGrpAttr);
-          for (size_t i = 0; gidGrpVals[i] != NULL; ++i) {
-            ids.push_back(atoi(gidGrpVals[i]));
-          }        
-          ldap_value_free(gidGrpVals);
-        }
-
-        if ( ber != NULL ) {
-          ber_free( ber, 0 );
-        }
-
-        ldap_msgfree( result );
-
-        s->set_idmap_ids(ids);
-
-        if (uidNumber == NULL || gidNumber == NULL || ids.size() <= 2) {
-          is_valid = false;
+        if (ldap_bind_dn.empty()) {
+          if (ldap_simple_bind_s(ld, NULL, NULL) != LDAP_SUCCESS) {
+            dout(1) << __func__ << " ldap_simple_bind_s failed. " << dendl;
+            is_valid = false;
+          }
         } else {
-          dout(1) << __func__ << " idmap lookup successful " << dendl;
+          if (ldap_simple_bind_s(ld, ldap_bind_dn.c_str(), ldap_bind_pw.c_str()) != LDAP_SUCCESS) {
+            dout(1) << __func__ << " ldap_simple_bind_s failed. " << dendl;
+            is_valid = false;
+          }
         }
-      } else {
-        dout(1) << " No LDAP entry found for client " << name << ". Lookup failed." << dendl;
-        is_valid = false;
+
+        // Lookup for client dn, uidNumber, and gidNumber
+        vector<unsigned int> ids;
+        unsigned int uidNumber, gidNumber;
+        string base_dn = g_conf->get_val<string>("mds_idmap_ldap_basedn");
+        char* attrs[2]; attrs[0] = "uidNumber"; attrs[1] = "gidNumber"; attrs[2] = NULL;
+
+        string filter_str = "(";
+        filter_str += g_conf->get_val<string>("mds_idmap_ldap_idattr");
+        filter_str += "=";
+        filter_str += name.to_str();
+        filter_str += ")";
+        const char* filter = filter_str.c_str();
+
+        rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+        dout(1) << __func__ << " results of client ldap search: " << ldap_err2string(rc) << dendl;
+
+        e = ldap_first_entry(ld, result);
+
+        if (e != NULL) { 
+
+          char* uidNumAttr = ldap_first_attribute(ld, e, &ber);
+          char* gidNumAttr = ldap_next_attribute(ld, e, ber);
+
+          if (uidNumAttr == NULL || gidNumAttr == NULL) {
+            dout(1) << __func__ << " No UID or GID Attribute found for client " << name << ". Lookup failed." << dendl;
+            is_valid = false;
+          }
+
+          char** uidNumVals = ldap_get_values(ld, e, uidNumAttr);
+          char** gidNumVals = ldap_get_values(ld, e, gidNumAttr);
+
+          if (uidNumVals == NULL || gidNumVals == NULL) {
+            dout(1) << __func__ << " No UID or GID Values found for client " << name << ". Lookup failed." << dendl;
+            is_valid = false;
+          }
+
+          vector<unsigned int> ids;
+          uidNumber = unsigned(atoi(uidNumVals[0])); ids.push_back(uidNumber);
+          gidNumber = unsigned(atoi(gidNumVals[0])); ids.push_back(gidNumber);
+          char* dn = ldap_get_dn(ld, e);
+
+          if (uidNumber == 0 || gidNumber == 0) { is_valid = false; }
+
+          // Free memory  
+          ldap_value_free(uidNumVals); 
+          ldap_value_free(gidNumVals);
+
+          if (ber != NULL) { 
+            ber_free(ber, 0); 
+          } 
+
+          ldap_msgfree(result); 
+          result = NULL; ber = NULL;
+
+          // Lookup for group GIDs
+          base_dn = g_conf->get_val<string>("mds_idmap_ldap_groupdn");
+          attrs[0] = "gidNumber"; attrs[1] = NULL;
+
+          string group_attr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");
+
+          if (group_attr == "dn") {
+            filter_str = "(";
+            filter_str += g_conf->get_val<string>("mds_idmap_ldap_member_attr");
+            filter_str += "=";
+            filter_str += string(dn);
+            filter_str += ")";
+            filter = filter_str.c_str();
+          }
+
+          rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+          dout(1) << __func__ << " results of group ldap search: " << ldap_err2string(rc) << dendl;
+
+          if (e == NULL) {
+            dout(1) << "No groups' gids found for client " << name << ". Lookup failed." << dendl;
+            is_valid = false;
+          }
+
+          for (e = ldap_first_entry( ld, result ); e != NULL; e = ldap_next_entry( ld, e )) {
+            char* gidGrpAttr = ldap_first_attribute(ld, e, &ber);
+            char** gidGrpVals = ldap_get_values(ld, e, gidGrpAttr);
+            for (size_t i = 0; gidGrpVals[i] != NULL; ++i) {
+              ids.push_back(atoi(gidGrpVals[i]));
+            }        
+            ldap_value_free(gidGrpVals);
+          }
+
+          if ( ber != NULL ) {
+            ber_free( ber, 0 );
+          }
+
+          ldap_msgfree(result);
+          s->set_idmap_ids(ids);
+
+          if (uidNumber == NULL || gidNumber == NULL || ids.size() <= 2) {
+            is_valid = false;
+          } else {
+            dout(1) << __func__ << " idmap lookup successful " << dendl;
+          }
+        } else {
+          dout(1) << " No LDAP entry found for client " << name << ". Lookup failed." << dendl;
+          is_valid = false;
+        }
       }
     } //RM_TEST CODE END
   }
