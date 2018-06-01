@@ -88,7 +88,7 @@ private:
   int state;
   uint64_t state_seq;
   int importing_count;
-  std::vector<unsigned int> idmap_ids; //idmap_ids[0] is client uid, idmap_ids[1] is client gid, idmap_ids[2..n] is group gids
+  std::vector<unsigned int> idmap_ids; //idmap_ids[0] is client uid, idmap_ids[1] is client gid, idmap_ids[2..n] are group gids
   bool idmap_reqd; //stores whether the "idmap" option was set in MDSAuthCaps
   bool idmap_update_reqd; //stores whether idmap lookup needs to be re-performed
   friend class SessionMap;

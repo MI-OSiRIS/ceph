@@ -1375,12 +1375,9 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
     }
 
     // RM_TEST CODE
-    bool idmap_possible = g_conf->get_val<bool>("mds_idmap");
+    bool mds_idmap = g_conf->get_val<bool>("mds_idmap");
 
-    if (idmap_possible && (s->auth_caps.idmap_required() || s->idmap_update_required())) {
-
-      #define LDAP_HOST "ldap.osris.org:389"
-      #define LDAP_SCOPE LDAP_SCOPE_SUBTREE
+    if (mds_idmap && (s->auth_caps.idmap_required() || s->idmap_update_required())) {
 
       s->set_idmap_reqd();
 
@@ -1435,7 +1432,7 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         filter_str += ")";
         const char* filter = filter_str.c_str();
 
-        rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+        rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
         dout(1) << __func__ << " results of client ldap search: " << ldap_err2string(rc) << dendl;
 
         e = ldap_first_entry(ld, result);
@@ -1484,14 +1481,14 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 
           if (group_attr == "dn") {
             filter_str = "(";
-            filter_str += g_conf->get_val<string>("mds_idmap_ldap_member_attr");
+            filter_str += g_conf->get_val<string>("mds_idmap_ldap_memberattr");
             filter_str += "=";
             filter_str += string(dn);
             filter_str += ")";
             filter = filter_str.c_str();
           }
 
-          rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+          rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
           dout(1) << __func__ << " results of group ldap search: " << ldap_err2string(rc) << dendl;
 
           if (e == NULL) {
@@ -1513,11 +1510,11 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
           }
 
           ldap_msgfree(result);
-          s->set_idmap_ids(ids);
 
           if (uidNumber == NULL || gidNumber == NULL || ids.size() <= 2) {
             is_valid = false;
           } else {
+            s->set_idmap_ids(ids);
             dout(1) << __func__ << " idmap lookup successful " << dendl;
           }
         } else {

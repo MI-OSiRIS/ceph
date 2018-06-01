@@ -303,7 +303,7 @@ std::vector<Option> get_global_options() {
 
     // restapi
     Option("restapi_log_level", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_description("default set by  python code"),
+    .set_description("default set by python code"),
 
     Option("restapi_base_url", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_description("default set by python code"),
@@ -5908,16 +5908,16 @@ std::vector<Option> get_mds_options() {
     .set_default("dn")
     .set_description(""),
 
+    Option("mds_idmap_ldap_memberattr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_default("uniqueMember")
+    .set_description(""),
+
     Option("mds_idmap_ldap_basedn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
     .set_description(""),
 
     Option("mds_idmap_ldap_groupdn", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
-    .set_description(""),
-
-    Option("mds_idmap_ldap_member_attr", Option::TYPE_STR, Option::LEVEL_ADVANCED)
-    .set_default("uniqueMember")
     .set_description(""),
 
     // RM_TEST END
