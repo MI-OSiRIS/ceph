@@ -88,9 +88,6 @@ private:
   int state;
   uint64_t state_seq;
   int importing_count;
-  std::vector<unsigned int> idmap_ids; //idmap_ids[0] is client uid, idmap_ids[1] is client gid, idmap_ids[2..n] are group gids
-  bool idmap_reqd; //stores whether the "idmap" option was set in MDSAuthCaps
-  bool idmap_update_reqd; //stores whether idmap lookup needs to be re-performed
   friend class SessionMap;
 
   // Human (friendly) name is soft state generated from client metadata
@@ -100,37 +97,6 @@ private:
   // Versions in this session was projected: used to verify
   // that appropriate mark_dirty calls follow.
   std::deque<version_t> projected;
-
-public: // idmap functions
-
-  void idmap_updated() {
-    idmap_update_reqd = false;
-  }
-
-  bool idmap_update_required() {
-    return idmap_update_reqd;
-  }
-
-  unsigned int get_client_uid() {
-    return idmap_ids[0];
-  }
-
-  unsigned int get_client_gid() {
-    return idmap_ids[1];
-  }
-  
-  std::vector<unsigned int> get_gid_list() {
-    std::vector<unsigned int> gid_list(idmap_ids.begin()+2, idmap_ids.end());
-    return gid_list;
-  } 
-
-  void set_idmap_ids(std::vector<unsigned int>& ids) {
-    idmap_ids = ids;
-  }
-
-  void set_idmap_reqd() {
-    idmap_reqd = true;
-  }
 
 public:
 
@@ -275,6 +241,47 @@ private:
 
   unsigned num_trim_flushes_warnings;
   unsigned num_trim_requests_warnings;
+
+  std::vector<uint64_t> idmap_ids; //idmap_ids[0] is client uid, idmap_ids[1] is client gid, idmap_ids[2..n] are group gids
+  bool idmap_reqd; //stores whether the "idmap" option was set in MDSAuthCaps
+  bool idmap_update_reqd; //stores whether idmap lookup needs to be re-performed
+
+public: // idmap functions
+
+  void idmap_updated() {
+    idmap_update_reqd = false;
+  }
+
+  bool idmap_update_required() {
+    return idmap_update_reqd;
+  }
+
+  bool idmap_required() {
+    return idmap_reqd;
+  }
+
+  unsigned int get_client_uid() {
+    return idmap_ids[0];
+  }
+
+  unsigned int get_client_gid() {
+    return idmap_ids[1];
+  }
+  
+  std::vector<unsigned int> get_gid_list() {
+    std::vector<unsigned int> gid_list(idmap_ids.begin()+2, idmap_ids.end());
+    return gid_list;
+  } 
+
+  void set_idmap_ids(std::vector<uint64_t>& ids) {
+    idmap_ids = ids;
+  }
+
+  void set_idmap_reqd() {
+    idmap_reqd = true;
+  }
+
+
 public:
   void add_completed_request(ceph_tid_t t, inodeno_t created) {
     info.completed_requests[t] = created;
@@ -348,7 +355,6 @@ public:
 
   int check_access(CInode *in, unsigned mask, int caller_uid, int caller_gid,
 		   const vector<uint64_t> *gid_list, int new_uid, int new_gid);
-
 
   Session() : 
     state(STATE_CLOSED), state_seq(0), importing_count(0),

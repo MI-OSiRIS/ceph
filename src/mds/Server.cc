@@ -1619,17 +1619,17 @@ void Server::handle_client_request(MClientRequest *req)
   }
 
   // Update information if idmap lookup was performed
-  if (session->idmap_update_required() || true) {
-    
+  if (session->idmap_required()) {
     std::vector<unsigned int> gid_vec = session->get_gid_list();
     const gid_t* gid_list = &gid_vec[0];
 
     req->set_caller_uid(session->get_client_uid());
     req->set_caller_gid(session->get_client_gid());
     req->set_gid_list(gid_vec.size(), gid_list);
-
-    session->idmap_updated();
   }
+
+  dout(4) << "handle_client_request " << *req << dendl;
+
 
   // old mdsmap?
   if (req->get_mdsmap_epoch() < mds->mdsmap->get_epoch()) {
@@ -1704,6 +1704,7 @@ void Server::handle_client_request(MClientRequest *req)
 
   // register + dispatch
   MDRequestRef mdr = mdcache->request_start(req);
+
   if (!mdr.get())
     return;
 
@@ -1727,6 +1728,7 @@ void Server::handle_client_request(MClientRequest *req)
   }
 
   dispatch_client_request(mdr);
+
   return;
 }
 
@@ -4043,6 +4045,7 @@ void Server::handle_client_file_readlock(MDRequestRef& mdr)
 void Server::handle_client_setattr(MDRequestRef& mdr)
 {
   MClientRequest *req = mdr->client_request;
+
   set<SimpleLock*> rdlocks, wrlocks, xlocks;
   CInode *cur = rdlock_path_pin_ref(mdr, 0, rdlocks, true);
   if (!cur) return;
@@ -4070,8 +4073,8 @@ void Server::handle_client_setattr(MDRequestRef& mdr)
   if (!mds->locker->acquire_locks(mdr, rdlocks, wrlocks, xlocks))
     return;
 
-  if ((mask & CEPH_SETATTR_UID) && (cur->inode.uid != req->head.args.setattr.uid))
-    access_mask |= MAY_CHOWN;
+  if ((mask & CEPH_SETATTR_UID) && (cur->inode.uid != req->head.args.setattr.uid)) {}
+    //access_mask |= MAY_CHOWN;
 
   if ((mask & CEPH_SETATTR_GID) && (cur->inode.gid != req->head.args.setattr.gid))
     access_mask |= MAY_CHGRP;
@@ -4171,6 +4174,7 @@ void Server::handle_client_setattr(MDRequestRef& mdr)
   if (xlocks.count(&cur->filelock) &&
       (cur->get_caps_wanted() & (CEPH_CAP_FILE_RD|CEPH_CAP_FILE_WR)))
     mds->mdlog->flush();
+
 }
 
 /* Takes responsibility for mdr */
