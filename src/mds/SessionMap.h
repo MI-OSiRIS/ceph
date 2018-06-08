@@ -281,8 +281,8 @@ public: // idmap functions
     idmap_reqd = true;
   }
 
-  void update_idmap(bool& is_valid, ostream* err) {
-    vector<uint64_t> ids = auth_caps.update_ids(info.auth_name.to_str(), is_valid, err);
+  void update_idmap(bool& is_valid) {
+    vector<uint64_t> ids = auth_caps.update_ids(info.auth_name.to_str(), is_valid);
     set_idmap_ids(ids);
     set_idmap_reqd();
   }

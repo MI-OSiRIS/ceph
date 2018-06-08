@@ -415,9 +415,7 @@ void Server::handle_client_session(MClientSession *m)
     }
     if (session->idmap_required()) {
       bool is_valid = true;
-      ostream *err;
-      session->update_idmap(is_valid, err);
-      if (!is_valid) { dout(1) << __func__ << *err << dendl; }
+      session->update_idmap(is_valid);
     }
     break;
     

@@ -147,8 +147,8 @@ public:
   bool path_capable(boost::string_view inode_path) const;
 
   // idmap functions
-  vector<uint64_t> update_ids(const string& name, bool& is_valid, ostream *err);
-  vector<uint64_t> ldap_lookup(const string& name, bool& is_valid, ostream *err);
+  vector<uint64_t> update_ids(const string& name, bool& is_valid);
+  vector<uint64_t> ldap_lookup(const string& name, bool& is_valid);
 
   friend std::ostream &operator<<(std::ostream &out, const MDSAuthCaps &cap);
 };

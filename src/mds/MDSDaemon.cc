@@ -1367,11 +1367,8 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         }
         //RM_TEST BEGIN
         if ((s->info.auth_name.to_str()).empty()) { s->info.auth_name = name; }
-        if (s->auth_caps.idmap_required()) {
-          ostream* err;
-          s->update_idmap(is_valid, err);
-          if (!is_valid) { dout(1) << __func__ << " idmap lookup error: \n" << *err << dendl; }
-        } //RM_TEST END
+        if (s->auth_caps.idmap_required()) { s->update_idmap(is_valid); }
+        //RM_TEST END
       } catch (buffer::error& e) {
         // Assume legacy auth, defaults to:
         //  * permit all filesystem ops
