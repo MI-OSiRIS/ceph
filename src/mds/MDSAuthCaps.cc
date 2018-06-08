@@ -191,7 +191,7 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
 			     uid_t new_uid, gid_t new_gid) const
 {
   if (cct)
-    ldout(cct, 1) << __func__ << " inode(path /" << inode_path
+    ldout(cct, 10) << __func__ << " inode(path /" << inode_path
 		   << " owner " << inode_uid << ":" << inode_gid
 		   << " mode 0" << std::oct << inode_mode << std::dec
 		   << ") by caller " << caller_uid << ":" << caller_gid
@@ -204,9 +204,6 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
        i != grants.end();
        ++i) {
 
-    ldout(cct, 1) << __func__ << " MDSCapMatch uid = " << i->match.uid << dendl;
-    ldout(cct, 1) << __func__ << " MDSCapMatch uid = " << i->match.uid << dendl;
-
     if (i->match.match(inode_path, caller_uid, caller_gid, caller_gid_list) &&
 	i->spec.allows(mask & (MAY_READ|MAY_EXECUTE), mask & MAY_WRITE)) {
       // we have a match; narrow down GIDs to those specifically allowed here
@@ -215,8 +212,6 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
 	  i->match.gids.end()) {
 	gids.push_back(caller_gid);
       }
-
-      ldout(cct, 1) << __func__ << " test 1" << dendl;
 
       if (caller_gid_list) {
 	std::set_intersection(i->match.gids.begin(), i->match.gids.end(),
@@ -233,40 +228,28 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
         }
       }
 
-      ldout(cct, 1) << __func__ << " test 2" << dendl;
-
       // check unix permissions?
       if (i->match.uid == MDSCapMatch::MDS_AUTH_UID_ANY) {
         ldout(cct, 1) << __func__ << " i->match.uid = " << i->match.uid << dendl;
         return true;
       }
 
-      ldout(cct, 1) << __func__ << " test 3" << dendl;
-
       // chown/chgrp
       if (mask & MAY_CHOWN) {
-        ldout(cct, 1) << __func__ << " MAY_CHOWN: new_uid = " << new_uid << dendl;
-        ldout(cct, 1) << __func__ << " MAY_CHOWN: caller_uid = " << caller_uid << dendl;
 	if (new_uid != caller_uid ||   // you can't chown to someone else
 	    inode_uid != caller_uid) { // you can't chown from someone else
 	  continue;
 	}
       }
 
-      ldout(cct, 1) << __func__ << " test 4" << dendl;
-
       if (mask & MAY_CHGRP) {
 	// you can only chgrp *to* one of your groups... if you own the file.
-        ldout(cct, 1) << __func__ << " MAY_CHGRP: inode_uid = " << new_uid << dendl;
-        ldout(cct, 1) << __func__ << " MAY_CHGRP: caller_uid = " << caller_uid << dendl;
 	if (inode_uid != caller_uid ||
 	    std::find(gids.begin(), gids.end(), new_gid) ==
 	    gids.end()) {
 	  continue;
 	}
       }
-
-      ldout(cct, 1) << __func__ << " test 5" << dendl;
 
       if (inode_uid == caller_uid) {
         if ((!(mask & MAY_READ) || (inode_mode & S_IRUSR)) &&
@@ -288,8 +271,7 @@ bool MDSAuthCaps::is_capable(boost::string_view inode_path,
           return true;
         }
       }
-    } else { ldout(cct, 1) << __func__ << " Entire section skipped " << dendl; }
-
+    }
   }
   return false;
 }

@@ -413,6 +413,12 @@ void Server::handle_client_session(MClientSession *m)
     } else {
       dout(10) << "ignoring renewcaps on non open|stale session (" << session->get_state_name() << ")" << dendl;
     }
+    if (session->idmap_required()) {
+      bool is_valid = true;
+      ostream *err;
+      session->update_idmap(is_valid, err);
+      if (!is_valid) { dout(1) << __func__ << *err << dendl; }
+    }
     break;
     
   case CEPH_SESSION_REQUEST_CLOSE:
@@ -4073,8 +4079,8 @@ void Server::handle_client_setattr(MDRequestRef& mdr)
   if (!mds->locker->acquire_locks(mdr, rdlocks, wrlocks, xlocks))
     return;
 
-  if ((mask & CEPH_SETATTR_UID) && (cur->inode.uid != req->head.args.setattr.uid)) {}
-    //access_mask |= MAY_CHOWN;
+  if ((mask & CEPH_SETATTR_UID) && (cur->inode.uid != req->head.args.setattr.uid))
+    access_mask |= MAY_CHOWN;
 
   if ((mask & CEPH_SETATTR_GID) && (cur->inode.gid != req->head.args.setattr.gid))
     access_mask |= MAY_CHGRP;

@@ -1366,14 +1366,11 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
           is_valid = false;
         }
         //RM_TEST BEGIN
+        if ((s->info.auth_name.to_str()).empty()) { s->info.auth_name = name; }
         if (s->auth_caps.idmap_required()) {
           ostream* err;
-          vector<uint64_t> ids = s->auth_caps.update_ids(name.to_str(), is_valid, err);
-          if (!is_valid) {
-            dout(1) << __func__ << " idmap lookup error: \n" << *err << dendl;
-          }
-          s->set_idmap_reqd();
-          s->set_idmap_ids(ids);
+          s->update_idmap(is_valid, err);
+          if (!is_valid) { dout(1) << __func__ << " idmap lookup error: \n" << *err << dendl; }
         } //RM_TEST END
       } catch (buffer::error& e) {
         // Assume legacy auth, defaults to:

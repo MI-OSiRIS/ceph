@@ -281,6 +281,11 @@ public: // idmap functions
     idmap_reqd = true;
   }
 
+  void update_idmap(bool& is_valid, ostream* err) {
+    vector<uint64_t> ids = auth_caps.update_ids(info.auth_name.to_str(), is_valid, err);
+    set_idmap_ids(ids);
+    set_idmap_reqd();
+  }
 
 public:
   void add_completed_request(ceph_tid_t t, inodeno_t created) {
