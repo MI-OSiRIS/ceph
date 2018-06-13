@@ -168,6 +168,8 @@ public:
 
   // idmap functions
   vector<uint64_t> update_ids(const string& name, bool& is_valid);
+  string get_ldap_bindpw();
+  vector<string> get_idmap_backend();
   vector<uint64_t> ldap_lookup(const string& name, bool& is_valid);
 
   friend std::ostream &operator<<(std::ostream &out, const MDSAuthCaps &cap);
