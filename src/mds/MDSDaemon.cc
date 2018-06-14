@@ -1419,15 +1419,6 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
 		       << "' does not parse: " << errstr.str();
           is_valid = false;
         }
-        // RM_TEST BEGIN
-        if ((s->info.auth_name.to_str()).empty()) {
-          s->info.auth_name = name; 
-        }
-        if (s->auth_caps.idmap_required()) 
-        {
-          s->update_idmap(is_valid);
-        }
-        // RM_TEST END
       } catch (buffer::error& e) {
         // Assume legacy auth, defaults to:
         //  * permit all filesystem ops
@@ -1435,6 +1426,11 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         dout(1) << __func__ << ": cannot decode auth caps bl of length " << caps_info.caps.length() << dendl;
         is_valid = false;
       }
+
+      if ((s->info.auth_name.to_str()).empty())
+        s->info.auth_name = name; 
+      if (s->auth_caps.idmap_required()) 
+        s->update_idmap(is_valid);
     }
   }
   return true;  // we made a decision (see is_valid)

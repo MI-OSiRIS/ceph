@@ -366,6 +366,17 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
     }
 
     if (!ids.empty()) {
+      string gids_list = "[";
+      for (size_t i = 2; i < ids.size() - 1; ++i) {
+        gids_list += to_string(ids[i]);
+        gids_list += ", ";
+      }
+      gids_list += to_string(ids.back());
+      gids_list += "]";
+ 
+      ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
+      ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
+      ldout(cct, 5) << __func__ << " set group gids list to: " << gids_list << dendl;
       return ids;
     }
   }
@@ -457,19 +468,23 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     }    
   }
 
-  // Lookup for client dn, uidNumber, and gidNumber
+  // Lookup for client uidNumber, gidNumber, and desired group search attribute
   vector<uint64_t> ids;
   uint64_t uidNumber, gidNumber;
   string base_dn = g_conf->get_val<string>("mds_idmap_ldap_basedn");
-  char* attrs[2]; attrs[0] = "uidNumber"; attrs[1] = "gidNumber"; attrs[2] = NULL;
 
-  string attribute = g_conf->get_val<string>("mds_idmap_ldap_idattr");
-  string value = name; 
+  string groupAttr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");  
+  
+  char* attrs[] = { "uidNumber", "gidNumber", const_cast<char*>(groupAttr.c_str()), NULL };
+  if (groupAttr == "dn") { attrs[2] = NULL; }
+
+  string searchAttr = g_conf->get_val<string>("mds_idmap_ldap_idattr");
+  string searchVal = name; 
 
   string filter_str = "(";
-  filter_str += attribute;
+  filter_str += searchAttr;
   filter_str += "=";
-  filter_str += value;
+  filter_str += searchVal;
   filter_str += ")";
   const char* filter = filter_str.c_str();
 
@@ -477,16 +492,15 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   ldout(cct, 5) << __func__ << " results of ldap search using query \""<< filter << "\": " << ldap_err2string(rc) << dendl;
   if (rc != LDAP_SUCCESS) {
     ldout(cct, 1) << __func__ << " ldap_search_ext_s failed during client session." 
-      << " Did not find attribute " << attribute << " matching value " << value
+      << " Did not find attribute " << searchAttr << " matching value " << searchVal
       << ". Ldap error: " << ldap_err2string(rc) << dendl;
     is_valid = false;
     return err;
-  }    
+  } 
 
   e = ldap_first_entry(ld, result);
 
   if (e != NULL) {
-
     char* uidNumAttr = ldap_first_attribute(ld, e, &ber);
     char* gidNumAttr = ldap_next_attribute(ld, e, ber);
 
@@ -509,9 +523,18 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
 
     uidNumber = uint64_t(atoi(uidNumVals[0])); ids.push_back(uidNumber);
     gidNumber = uint64_t(atoi(gidNumVals[0])); ids.push_back(gidNumber);
-    char* dn = ldap_get_dn(ld, e);
+    if (uidNumber == 0 || gidNumber == 0) { is_valid = false; return err;}
 
-    if (uidNumber == 0 || gidNumber == 0) { is_valid = false; }
+    if (groupAttr != "dn") {
+      char* grpSearchAttr = ldap_next_attribute(ld, e, ber);
+      char** grpSearchVals = ldap_get_values(ld, e, grpSearchAttr);
+      searchVal = grpSearchVals[0];
+      searchAttr = g_conf->get_val<string>("mds_idmap_ldap_memberattr");
+      ldap_value_free(grpSearchVals);
+    } else {
+      searchVal = ldap_get_dn(ld, e);
+      searchAttr = g_conf->get_val<string>("mds_idmap_ldap_memberattr");
+    }
 
     // Free memory
     ldap_value_free(uidNumVals);
@@ -526,28 +549,25 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
 
     // Lookup for group GIDs
     base_dn = g_conf->get_val<string>("mds_idmap_ldap_groupdn");
-    attrs[0] = "gidNumber"; attrs[1] = NULL;
 
-    string group_attr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");
+    filter_str = "(";
+    filter_str += searchAttr;
+    filter_str += "=";
+    filter_str += searchVal;
+    filter_str += ")";
+    filter = filter_str.c_str();
 
-    if (group_attr == "dn") {
-      filter_str = "(";
-      filter_str += g_conf->get_val<string>("mds_idmap_ldap_memberattr");
-      filter_str += "=";
-      filter_str += string(dn);
-      filter_str += ")";
-      filter = filter_str.c_str();
-    }
+    char* gidAttrs[] = { "gidNumber", NULL };
 
-    rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
+    rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, gidAttrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
     ldout(cct, 5) << __func__ << " results of ldap search using query \""<< filter << "\": " << ldap_err2string(rc) << dendl;
     if (rc != LDAP_SUCCESS) {
       ldout(cct, 1) << __func__ << " ldap_search_ext_s failed during client session." 
-        << " Did not find attribute " << attribute << " matching value " << value
+        << " Did not find attribute " << searchAttr << " matching value " << searchVal
         << ". Ldap error: " << ldap_err2string(rc) << dendl;
       is_valid = false;
       return err;
-    }    
+    }
 
     if (e == NULL) {
       ldout(cct, 1) << __func__ << "ldap search results error: No groups' gids found for client " << name << "." << dendl;
@@ -581,6 +601,18 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     return err;
   }
 
+  string gids_list = "[";
+  for (size_t i = 2; i < ids.size() - 1; ++i) {
+    gids_list += to_string(ids[i]);
+    gids_list += ", ";
+  }
+  gids_list += to_string(ids.back());
+  gids_list += "]";
+ 
+  ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
+  ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
+  ldout(cct, 5) << __func__ << " set group gids list to: " << gids_list << dendl;
+  
   return ids;
 }
 
