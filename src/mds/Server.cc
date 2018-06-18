@@ -1626,9 +1626,6 @@ void Server::set_trace_dist(Session *session, MClientReply *reply,
   reply->set_trace(bl);
 }
 
-
-
-
 /***
  * process a client request
  * This function DOES put the passed message before returning
