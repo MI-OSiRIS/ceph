@@ -55,6 +55,7 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
     using qi::lit;
 
     spaces = +(lit(' ') | lit('\n') | lit('\t'));
+    delim = +(lit(';') | lit(','));
 
     quoted_path %=
       lexeme[lit("\"") >> *(char_ - '"') >> '"'] | 
@@ -87,20 +88,26 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
         |
         (lit("r"))[_val = MDSCapSpec(MDSCapSpec::READ)]
         );
-    idmap = *(spaces >> lit("idmap"));
+
+    // Fixme: Currently need to assume idmap is specified last - :(
+    idmap = -(*spaces >>
+             (delim >> *spaces >> lit("idmap") >>  delim) |
+             (lit("idmap") >> *spaces >> delim) |
+             (delim >> *spaces >> lit("idmap")) );
 
     grant = lit("allow") >> (capspec >> match)[_val = phoenix::construct<MDSCapGrant>(_1, _2)];
     grants %= (grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
     mdscaps = (grants >> idmap) [_val = phoenix::construct<MDSAuthCaps>(_1, _2)]; 
   }
   qi::rule<Iterator> spaces;
+  qi::rule<Iterator> delim;
   qi::rule<Iterator, string()> quoted_path, unquoted_path;
   qi::rule<Iterator, MDSCapSpec()> capspec;
   qi::rule<Iterator, string()> path;
   qi::rule<Iterator, uint32_t()> uid;
   qi::rule<Iterator, std::vector<uint32_t>() > uintlist;
   qi::rule<Iterator, std::vector<uint32_t>() > gidlist;
-  qi::rule<Iterator, std::string() > idmap;
+  qi::rule<Iterator, string() > idmap;
   qi::rule<Iterator, MDSCapMatch()> match;
   qi::rule<Iterator, MDSCapGrant()> grant;
   qi::rule<Iterator, std::vector<MDSCapGrant>()> grants;
