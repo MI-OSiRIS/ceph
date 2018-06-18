@@ -243,21 +243,12 @@ private:
   unsigned num_trim_requests_warnings;
 
   std::vector<uint64_t> idmap_ids; //idmap_ids[0] is client uid, idmap_ids[1] is client gid, idmap_ids[2..n] are group gids
-  bool idmap_reqd; //stores whether the "idmap" option was set in MDSAuthCaps
-  bool idmap_update_reqd; //stores whether idmap lookup needs to be re-performed
+  bool idmap; //stores whether the "idmap" option was set in MDSAuthCaps
 
 public: // idmap functions
 
-  void idmap_updated() {
-    idmap_update_reqd = false;
-  }
-
-  bool idmap_update_required() {
-    return idmap_update_reqd;
-  }
-
   bool idmap_required() {
-    return idmap_reqd;
+    return idmap;
   }
 
   unsigned int get_client_uid() {
@@ -274,17 +265,20 @@ public: // idmap functions
   } 
 
   void set_idmap_ids(std::vector<uint64_t>& ids) {
+    idmap_ids.clear();
     idmap_ids = ids;
   }
 
-  void set_idmap_reqd() {
-    idmap_reqd = true;
+  void set_idmap() {
+    idmap = true;
   }
 
   void update_idmap(bool& is_valid) {
     vector<uint64_t> ids = auth_caps.update_ids(info.auth_name.to_str(), is_valid);
-    set_idmap_ids(ids);
-    set_idmap_reqd();
+    if (!ids.empty()) {
+      set_idmap_ids(ids);
+    }
+    set_idmap();
   }
 
 public:
@@ -372,8 +366,7 @@ public:
     completed_requests_dirty(false),
     num_trim_flushes_warnings(0),
     num_trim_requests_warnings(0),
-    idmap_reqd(false),
-    idmap_update_reqd(false) { }
+    idmap(false) { }
   ~Session() override {
     if (state == STATE_CLOSED) {
       item_session_list.remove_myself();
