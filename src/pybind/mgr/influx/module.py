@@ -367,6 +367,7 @@ class Module(MgrModule):
         self.init_module_config()
         self.run = True
 
+        timeout = 3 # Don't let a bad connection stop the entire program. Timeout after this (in sec.)
         while self.run:
             start = time.time()
             self.send_to_influx()
@@ -375,3 +376,6 @@ class Module(MgrModule):
                            runtime)
             self.log.debug("Sleeping for %d seconds", self.config['interval'])
             self.event.wait(self.config['interval'])
+            if time.time() - start > timeout:
+                print("G:TIMEDOUT with timeout", timeout)
+                break
