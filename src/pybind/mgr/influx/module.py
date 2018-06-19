@@ -9,6 +9,7 @@ from mgr_module import MgrModule
 try:
     from influxdb import InfluxDBClient
     from influxdb.exceptions import InfluxDBClientError
+    from influxdb.exceptions import InfluxDBServerError
     from requests.exceptions import ConnectionError
 except ImportError:
     InfluxDBClient = None
@@ -366,16 +367,24 @@ class Module(MgrModule):
         self.log.info('Starting influx module')
         self.init_module_config()
         self.run = True
-
-        timeout = 3 # Don't let a bad connection stop the entire program. Timeout after this (in sec.)
+        health = {
+            'MGR_INFLUX_SEND_FAILED': {
+                'severity': 'warning',
+                'summary': "",
+                'detail': []
+            }
+        }
         while self.run:
             start = time.time()
-            self.send_to_influx()
+            try:
+                self.send_to_influx()
+            except InfluxDBServerError as exception:
+                self.log.exception("Unable to connect to %s:%d with exception: %s", self.config['hostname'], self.config['port'], str(exception))
+                health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port']) + " \n "
+                health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(exception)]
+                self.set_health_checks(health)
             runtime = time.time() - start
             self.log.debug('Finished sending data in Influx in %.3f seconds',
                            runtime)
             self.log.debug("Sleeping for %d seconds", self.config['interval'])
             self.event.wait(self.config['interval'])
-            if time.time() - start > timeout:
-                print("G:TIMEDOUT with timeout", timeout)
-                break
