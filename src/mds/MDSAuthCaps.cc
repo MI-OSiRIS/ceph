@@ -55,6 +55,7 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
     using qi::lit;
 
     spaces = +(lit(' ') | lit('\n') | lit('\t'));
+    delim = +(lit(';') | lit(','));
 
     quoted_path %=
       lexeme[lit("\"") >> *(char_ - '"') >> '"'] | 
@@ -84,20 +85,25 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
         (lit("r"))[_val = MDSCapSpec(true, false, false, false)]
         );
 
-    idmap = -(spaces >> lit("idmap") >> -(*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
+    // Fixme: Currently need to assume idmap is specified last - :(
+    idmap = -(*spaces >> delim >> *spaces >> lit("idmap"));
+            //(delim >> *spaces >> lit("idmap") >>  delim) |
+            //(lit("idmap") >> *spaces >> delim) |
+            //(delim >> *spaces >> lit("idmap")) );
 
     grant = lit("allow") >> (capspec >> match)[_val = phoenix::construct<MDSCapGrant>(_1, _2)];
     grants %= ((grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' '))) >> -(*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
     mdscaps = (grants >> idmap) [_val = phoenix::construct<MDSAuthCaps>(_1, _2)]; 
   }
   qi::rule<Iterator> spaces;
+  qi::rule<Iterator> delim;
   qi::rule<Iterator, string()> quoted_path, unquoted_path;
   qi::rule<Iterator, MDSCapSpec()> capspec;
   qi::rule<Iterator, string()> path;
   qi::rule<Iterator, uint32_t()> uid;
   qi::rule<Iterator, std::vector<uint32_t>() > uintlist;
   qi::rule<Iterator, std::vector<uint32_t>() > gidlist;
-  qi::rule<Iterator, std::string() > idmap;
+  qi::rule<Iterator, string() > idmap;
   qi::rule<Iterator, MDSCapMatch()> match;
   qi::rule<Iterator, MDSCapGrant()> grant;
   qi::rule<Iterator, std::vector<MDSCapGrant>()> grants;
@@ -347,25 +353,21 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
   for (size_t i = 0; i < backends.size(); ++i) {
     if (backends[i] == "ldap") {
       ids = ldap_lookup(name, is_valid);
-
-      if (!ids.empty()) {
-        for (auto& grant : grants) {
-          grant.match.uid = ids[0];
-          grant.match.gids.clear();
-          for (auto i = ids.begin() + 2; i != ids.end(); ++i) {
-            grant.match.gids.push_back(*i); 
-          }
-        }
-      } else { 
-        ldout(cct, 1) << __func__ << " ldap lookup failure. Maintaining original ids." << dendl;
-      }
     }
-
     if (backends[i] == "key") {
-      ldout(cct, 1) << __func__ << " backend selected = key" << dendl;
+      // Fixme: Implement key backend
+      // ids = key_lookup();
     }
 
     if (!ids.empty()) {
+      for (auto& grant : grants) {
+        grant.match.uid = ids[0];
+        grant.match.gids.clear();
+        for (auto i = ids.begin() + 2; i != ids.end(); ++i) {
+          grant.match.gids.push_back(*i);
+        }
+      }
+
       string gids_list = "[";
       for (size_t i = 2; i < ids.size() - 1; ++i) {
         gids_list += to_string(ids[i]);
@@ -374,12 +376,20 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
       gids_list += to_string(ids.back());
       gids_list += "]";
  
+      ldout(cct, 5) << __func__ << " set keys according to backend: " << backends[i] << dendl;
       ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
       ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
       ldout(cct, 5) << __func__ << " set group gids list to: " << gids_list << dendl;
-      return ids;
+    } else {
+      ldout(cct, 5) << __func__ << " failed to set keys according to backend: " << backends[i] << dendl;
     }
   }
+
+  if (ids.empty()) {
+    ldout(cct, 1) << __func__ << " no specified backends successfully returned. Original ids maintained." << dendl;
+  }
+
+  return ids;
 }
 
 vector<string> MDSAuthCaps::get_idmap_backend()
@@ -472,7 +482,6 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   vector<uint64_t> ids;
   uint64_t uidNumber, gidNumber;
   string base_dn = g_conf->get_val<string>("mds_idmap_ldap_basedn");
-
   string groupAttr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");  
   
   char* attrs[] = { "uidNumber", "gidNumber", const_cast<char*>(groupAttr.c_str()), NULL };
@@ -600,18 +609,6 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     is_valid = false;
     return err;
   }
-
-  string gids_list = "[";
-  for (size_t i = 2; i < ids.size() - 1; ++i) {
-    gids_list += to_string(ids[i]);
-    gids_list += ", ";
-  }
-  gids_list += to_string(ids.back());
-  gids_list += "]";
- 
-  ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
-  ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
-  ldout(cct, 5) << __func__ << " set group gids list to: " << gids_list << dendl;
   
   return ids;
 }

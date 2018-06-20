@@ -417,7 +417,7 @@ void Server::handle_client_session(MClientSession *m)
     } else {
       dout(10) << "ignoring renewcaps on non open|stale session (" << session->get_state_name() << ")" << dendl;
     }
-    if (session->idmap_required()) {
+    if (session->auth_caps.idmap_required()) {
       bool is_valid = true;
       session->update_idmap(is_valid);
     }
@@ -1625,9 +1625,6 @@ void Server::set_trace_dist(Session *session, MClientReply *reply,
 
   reply->set_trace(bl);
 }
-
-
-
 
 /***
  * process a client request

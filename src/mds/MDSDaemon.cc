@@ -1428,7 +1428,8 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
       }
 
       if ((s->info.auth_name.to_str()).empty())
-        s->info.auth_name = name; 
+        s->info.auth_name = name;
+ 
       if (s->auth_caps.idmap_required()) 
         s->update_idmap(is_valid);
     }
