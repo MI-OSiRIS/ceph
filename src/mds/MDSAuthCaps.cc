@@ -83,10 +83,11 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
         |
         (lit("r"))[_val = MDSCapSpec(true, false, false, false)]
         );
-    idmap = *(spaces >> lit("idmap"));
+
+    idmap = -(spaces >> lit("idmap") >> -(*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
 
     grant = lit("allow") >> (capspec >> match)[_val = phoenix::construct<MDSCapGrant>(_1, _2)];
-    grants %= (grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
+    grants %= ((grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' '))) >> -(*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
     mdscaps = (grants >> idmap) [_val = phoenix::construct<MDSAuthCaps>(_1, _2)]; 
   }
   qi::rule<Iterator> spaces;
@@ -233,7 +234,6 @@ bool MDSAuthCaps::is_capable(std::string_view inode_path,
 
       // check unix permissions?
       if (i->match.uid == MDSCapMatch::MDS_AUTH_UID_ANY) {
-        ldout(cct, 1) << __func__ << " i->match.uid = " << i->match.uid << dendl;
         return true;
       }
 
