@@ -48,7 +48,7 @@ class Module(MgrModule):
             {
                 'name': 'verify_ssl',
                 'default': 'true'
-            },
+            }
     ]
 
     @property
@@ -266,30 +266,23 @@ class Module(MgrModule):
         verify_ssl = \
             self.get_config("verify_ssl", default=self.config_keys['verify_ssl'])
         self.config['verify_ssl'] = verify_ssl.lower() == 'true'
-
-        # get_config_json returns None if key is not set, does not accept default arg
-        self.config['destinations'] = \
-                self.get_config_json("destinations")
-
+        
         self.init_influx_clients()
 
     def init_influx_clients(self):
 
         self.clients = []
 
-        if not self.config['destinations']:
-            destinations = [
-                {
-                    'hostname':   self.config['hostname'],
-                    'username':   self.config['username'],
-                    'password':   self.config['password'],
-                    'database':   self.config['database'],
-                    'ssl':        self.config['ssl'],
-                    'verify_ssl': self.config['verify_ssl']
-                },
-            ]
-        else:
-            destinations = self.config['destinations']
+        destinations = [
+            {
+                'hostname':   self.config['hostname'],
+                'username':   self.config['username'],
+                'password':   self.config['password'],
+                'database':   self.config['database'],
+                'ssl':        self.config['ssl'],
+                'verify_ssl': self.config['verify_ssl']
+            },
+        ]
 
         for dest in destinations:
             # use global settings if these keys not set in destinations object
@@ -319,11 +312,6 @@ class Module(MgrModule):
             self.clients.append([client,conf])
 
     def send_to_influx(self):
-<<<<<<< HEAD
-        if not self.config['hostname']:
-            self.log.error("No Influx server configured, please set one using: "
-                           "ceph influx config-set hostname <hostname>")
-
         if not self.config['hostname'] and not self.config['destinations']:
             self.log.error("No Influx server configured, please set using: "
                            "ceph influx config-set mgr/influx/hostname <hostname> or ceph influx config-set mgr/influx/destinations '<json array>'")
@@ -336,50 +324,6 @@ class Module(MgrModule):
             })
             return
 
-        # If influx server has authentication turned off then
-        # missing username/password is valid.
-        self.log.debug("Sending data to Influx host: %s",
-                       self.config['hostname'])
-        client = InfluxDBClient(self.config['hostname'], self.config['port'],
-                                self.config['username'],
-                                self.config['password'],
-                                self.config['database'],
-                                self.config['ssl'],
-                                self.config['verify_ssl'])
-
-        # using influx client get_list_database requires admin privs,
-        # instead we'll catch the not found exception and inform the user if
-        # db can not be created
-        try:
-            df_stats, pools = self.get_df_stats()
-            client.write_points(df_stats, 'ms')
-            client.write_points(self.get_daemon_stats(), 'ms')
-            client.write_points(self.get_pg_summary(pools))
-            self.set_health_checks(dict())
-        except ConnectionError as e:
-            self.log.exception("Failed to connect to Influx host %s:%d",
-                               self.config['hostname'], self.config['port'])
-            self.set_health_checks({
-                'MGR_INFLUX_SEND_FAILED': {
-                    'severity': 'warning',
-                    'summary': 'Failed to send data to InfluxDB server at %s:%d'
-                               ' due to an connection error'
-                               % (self.config['hostname'], self.config['port']),
-                    'detail': [str(e)]
-                }
-            })
-        except InfluxDBClientError as e:
-            if e.code == 404:
-                self.log.info("Database '%s' not found, trying to create "
-                              "(requires admin privs).  You can also create "
-                              "manually and grant write privs to user "
-                              "'%s'", self.config['database'],
-                              self.config['username'])
-                client.create_database(self.config['database'])
-                client.create_retention_policy(name='8_weeks', duration='8w',
-                                               replication='1', default=True,
-                                               database=self.config['database'])
-            else:
         df_stats = self.get_df_stats()
         daemon_stats = self.get_daemon_stats()
         pg_summary = self.get_pg_summary(df_stats[1])
