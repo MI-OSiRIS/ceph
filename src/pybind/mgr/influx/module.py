@@ -388,24 +388,26 @@ class Module(MgrModule):
             # using influx client get_list_database requires admin privs,
             # instead we'll catch the not found exception and inform the user if
             # db can not be created
+            health = {
+                'MGR_INFLUX_SEND_FAILED': {
+                    'severity': 'warning',
+                    'summary': "",
+                    'detail': []
+                }
+            }
             try:
                 client.write_points(df_stats[0], 'ms')
                 client.write_points(daemon_stats, 'ms')
                 client.write_points(self.get_pg_summary(df_stats[1]))
                 self.set_health_checks(dict())
+
             except ConnectionError as e:
                 # InfluxDBClient also has get_host and get_port but since we have the config here anyways...
-                self.log.exception("Failed to connect to Influx host %s:%d",
-                                   conf['hostname'], conf['port'])
-                self.set_health_checks({
-                    'MGR_INFLUX_SEND_FAILED': {
-                        'severity': 'warning',
-                        'summary': 'Failed to send data to InfluxDB server at %s:%d'
-                                   ' due to a connection error'
-                                   %(conf['hostname'], conf['port']),
-                        'detail': [str(e)]
-                    }
-                })
+                self.log.exception("Failed to connect to Influx host %s:%d", conf['hostname'], conf['port'])
+                health['MGR_INFLUX_SEND_FAILED']['severity'] = 'warning'
+                health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port']) + " \n "
+                health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(e)]
+                self.set_health_checks(health)
             except InfluxDBClientError as e:
                 if e.code == 404:
                     self.log.info("Database '%s' not found, trying to create "
@@ -413,16 +415,17 @@ class Module(MgrModule):
                                   "manually and grant write privs to user "
                                   "'%s'", conf['database'],
                                   conf['username'])
-                    client.create_database(conf['database'])
                 else:
-                    self.set_health_checks({
-                        'MGR_INFLUX_SEND_FAILED': {
-                            'severity': 'warning',
-                            'summary': 'Failed to send data to InfluxDB',
-                            'detail': [str(e)]
-                        }
-                    })
-                    raise
+                    health['MGR_INFLUX_SEND_FAILED']['severity'] = 'warning'
+                    health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Failed to send data to InfluxDB'
+                    health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(e)]
+                    self.set_health_checks(health)
+            except InfluxDBServerError as exception:
+                self.log.exception("Unable to connect to %s:%d with exception: %s", conf['hostname'], conf['port'], str(exception))
+                health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port']) + " \n "
+                health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(exception)]
+                self.set_health_checks(health)
+
 
     def shutdown(self):
         self.log.info('Stopping influx module')
@@ -467,22 +470,9 @@ class Module(MgrModule):
         self.log.info('Starting influx module')
         self.init_module_config()
         self.run = True
-        health = {
-            'MGR_INFLUX_SEND_FAILED': {
-                'severity': 'warning',
-                'summary': "",
-                'detail': []
-            }
-        }
         while self.run:
             start = time.time()
-            try:
-                self.send_to_influx()
-            except InfluxDBServerError as exception:
-                self.log.exception("Unable to connect to %s:%d with exception: %s", self.config['hostname'], self.config['port'], str(exception))
-                health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port']) + " \n "
-                health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(exception)]
-                self.set_health_checks(health)
+            self.send_to_influx()
             runtime = time.time() - start
             self.log.debug('Finished sending data in Influx in %.3f seconds',
                            runtime)
