@@ -101,7 +101,9 @@ int main(int argc, const char **argv, const char *envp[]) {
     } else if (ceph_argparse_flag(args, i, "-V", (char*)nullptr)) {
       const char* tmpargv[] = {
 	"ceph-fuse",
-	"-V"
+	"-V",
+        "-o uid=100051",
+        "-o gid=100051"
       };
 
       struct fuse_args fargs = FUSE_ARGS_INIT(2, (char**)tmpargv);
@@ -126,7 +128,7 @@ int main(int argc, const char **argv, const char *envp[]) {
     cerr << std::endl;
     cerr << "WARNING: Ceph inode numbers are 64 bits wide, and FUSE on 32-bit kernels does" << std::endl;
     cerr << "         not cope well with that situation.  Expect to crash shortly." << std::endl;
-    cerr << std::endl;
+   cerr << std::endl;
 #endif
 
   Preforker forker;
@@ -238,6 +240,7 @@ int main(int argc, const char **argv, const char *envp[]) {
 			  Messenger::Policy::lossless_client(0));
 
     client = new StandaloneClient(messenger, mc);
+
     if (filer_flags) {
       client->set_filer_flags(filer_flags);
     }
@@ -265,7 +268,9 @@ int main(int argc, const char **argv, const char *envp[]) {
     }
     
     client->update_metadata("mount_point", cfuse->get_mount_point());
-    perms = client->pick_my_perms();
+    
+    perms = UserPerm(100051, 100051);
+    //perms = client->pick_my_perms();
     {
       // start up fuse
       // use my argc, argv (make sure you pass a mount point!)
