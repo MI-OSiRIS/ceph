@@ -317,6 +317,11 @@ bool MDSAuthCaps::idmap_required()
     return idmap; 
 }
 
+bool MDSAuthCaps::idmap_required() 
+{
+    return idmap; 
+}
+
 bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
 {
   // Special case for legacy caps
@@ -332,6 +337,7 @@ bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
   MDSCapParser<decltype(iter)> g;
 
   bool r = qi::phrase_parse(iter, end, g, ascii::space, *this);
+
   if (c->_conf->get_val<bool>("mds_idmap")) {
     idmap = (str.find("idmap") != std::string::npos);
   }
@@ -402,6 +408,7 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
       gids_list += "]";
  
       ldout(cct, 1) << __func__ << " Successful idmap lookup." << dendl;
+
       ldout(cct, 5) << __func__ << " set keys according to backend: " << backends[i] << dendl;
       ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
       ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
@@ -510,6 +517,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   uint64_t uidNumber, gidNumber;
   string base_dn = g_conf->get_val<string>("mds_idmap_ldap_basedn");
   string groupAttr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");  
+
   groupAttr.erase(remove(groupAttr.begin(), groupAttr.end(), '\"'), groupAttr.end());  
   groupAttr.erase(remove(groupAttr.begin(), groupAttr.end(), '\''), groupAttr.end());  
 

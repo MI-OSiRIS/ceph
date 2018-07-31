@@ -1673,6 +1673,10 @@ void Server::handle_client_request(MClientRequest *req)
     req->set_caller_uid(session->get_client_uid());
     req->set_caller_gid(session->get_client_gid());
     req->set_gid_list(gid_vec.size(), gid_list);
+<<<<<<< HEAD
+=======
+
+>>>>>>> 5f3646c2c7d309f5e8b531a86f7015189c94a7b8
     dout(4) << __func__ << " updated request " << *req << dendl;
   }
 
