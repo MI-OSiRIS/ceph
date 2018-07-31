@@ -94,6 +94,10 @@ class MClientCaps : public Message {
 
   uint64_t get_client_tid() { return get_tid(); }
   void set_client_tid(uint64_t s) { set_tid(s); }
+  void set_caller_ids(uint32_t uid_, uint32_t gid_) {
+    caller_uid = uid_;
+    caller_gid = gid_;
+  }
 
   snapid_t get_snap_follows() { return snapid_t(head.snap_follows); }
   void set_snap_follows(snapid_t s) { head.snap_follows = s; }

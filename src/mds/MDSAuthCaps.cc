@@ -92,7 +92,7 @@ struct MDSCapParser : qi::grammar<Iterator, MDSAuthCaps()>
             //(delim >> *spaces >> lit("idmap")) );
 
     grant = lit("allow") >> (capspec >> match)[_val = phoenix::construct<MDSCapGrant>(_1, _2)];
-    grants %= ((grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' '))) >> -(*lit(' ') >> (lit(';') | lit(',')) >> *lit(' ')));
+    grants %= grant % (*lit(' ') >> (lit(';') | lit(',')) >> *lit(' '));
     mdscaps = (grants >> idmap) [_val = phoenix::construct<MDSAuthCaps>(_1, _2)]; 
   }
   qi::rule<Iterator> spaces;
@@ -216,6 +216,7 @@ bool MDSAuthCaps::is_capable(std::string_view inode_path,
 
     if (i->match.match(inode_path, caller_uid, caller_gid, caller_gid_list) &&
 	i->spec.allows(mask & (MAY_READ|MAY_EXECUTE), mask & MAY_WRITE)) {
+
       // we have a match; narrow down GIDs to those specifically allowed here
       vector<uint64_t> gids;
       if (std::find(i->match.gids.begin(), i->match.gids.end(), caller_gid) !=
@@ -313,7 +314,9 @@ bool MDSAuthCaps::parse(CephContext *c, std::string_view str, ostream *err)
   MDSCapParser<decltype(iter)> g;
 
   bool r = qi::phrase_parse(iter, end, g, ascii::space, *this);
-  idmap = (str.find("idmap") != std::string::npos);
+  if (c->_conf->get_val<bool>("mds_idmap")) {
+    idmap = (str.find("idmap") != std::string::npos);
+  }
 
   cct = c;  // set after parser self-assignment
 
@@ -352,7 +355,11 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
 
   for (size_t i = 0; i < backends.size(); ++i) {
     if (backends[i] == "ldap") {
-      ids = ldap_lookup(name, is_valid);
+      try {
+        ids = ldap_lookup(name, is_valid);
+      } catch (...) {
+        ldout(cct, 1) << __func__ << " Error in LDAP lookup. Possible failure of SSL verification." << dendl;
+      }
     }
     if (backends[i] == "key") {
       // Fixme: Implement key backend
@@ -376,6 +383,7 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
       gids_list += to_string(ids.back());
       gids_list += "]";
  
+      ldout(cct, 1) << __func__ << " Successful idmap lookup." << dendl;
       ldout(cct, 5) << __func__ << " set keys according to backend: " << backends[i] << dendl;
       ldout(cct, 5) << __func__ << " set client uid to: " << ids[0] << dendl;
       ldout(cct, 5) << __func__ << " set client gid to: " << ids[1] << dendl;
@@ -386,7 +394,8 @@ vector<uint64_t> MDSAuthCaps::update_ids(const string& name, bool& is_valid) {
   }
 
   if (ids.empty()) {
-    ldout(cct, 1) << __func__ << " no specified backends successfully returned. Original ids maintained." << dendl;
+    ldout(cct, 1) << __func__ << " client identity " << name << " not found in any idmap backend." << dendl;
+    ldout(cct, 5) << __func__ << " Session request denied." << dendl;
   }
 
   return ids;
@@ -443,7 +452,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
 
   rc = ldap_initialize(&ld, ldap_uri.c_str());
   if (rc != LDAP_SUCCESS) {
-    ldout(cct, 1) << __func__ << " ldap_initialize failed during client session with uri " << ldap_uri 
+    ldout(cct, 5) << __func__ << " ldap_initialize failed during client session with uri " << ldap_uri 
       << ". Ldap error: " << ldap_err2string(rc) << dendl;
     is_valid = false;
     return err;
@@ -451,7 +460,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
 
   rc = ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &version);
   if (rc != LDAP_SUCCESS) {
-    ldout(cct, 1) << __func__ << " ldap_set_option failed during client session with uri " << ldap_uri 
+    ldout(cct, 5) << __func__ << " ldap_set_option failed during client session with uri " << ldap_uri 
       << ". Ldap error: " << ldap_err2string(rc) << dendl;
     is_valid = false;
     return err;
@@ -463,7 +472,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   if (ldap_bind_dn.empty()) {
     rc = ldap_simple_bind_s(ld, NULL, NULL);
     if (rc != LDAP_SUCCESS) {
-      ldout(cct, 1) << __func__ << " ldap_simple_bind_s failed during client session with uri " << ldap_uri 
+      ldout(cct, 5) << __func__ << " ldap_simple_bind_s failed during client session with uri " << ldap_uri 
         << ". Ldap error: " << ldap_err2string(rc) << dendl;
       is_valid = false;
       return err;
@@ -471,8 +480,8 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   } else {
     rc = ldap_simple_bind_s(ld, ldap_bind_dn.c_str(), ldap_bind_pw.c_str());
     if (rc != LDAP_SUCCESS) {
-      ldout(cct, 1) << __func__ << " ldap_simple_bind_s failed during client session with uri " << ldap_uri 
-        << ". Ldap error: " << ldap_err2string(rc) << dendl;
+      ldout(cct, 5) << __func__ << " ldap_simple_bind_s failed during client session with uri " << ldap_uri 
+        << " and bind dn " << ldap_bind_dn << ". Ldap error: " << ldap_err2string(rc) << dendl;
       is_valid = false;
       return err;
     }    
@@ -483,7 +492,9 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   uint64_t uidNumber, gidNumber;
   string base_dn = g_conf->get_val<string>("mds_idmap_ldap_basedn");
   string groupAttr = g_conf->get_val<string>("mds_idmap_ldap_groupattr");  
-  
+  groupAttr.erase(remove(groupAttr.begin(), groupAttr.end(), '\"'), groupAttr.end());  
+  groupAttr.erase(remove(groupAttr.begin(), groupAttr.end(), '\''), groupAttr.end());  
+
   char* attrs[] = { "uidNumber", "gidNumber", const_cast<char*>(groupAttr.c_str()), NULL };
   if (groupAttr == "dn") { attrs[2] = NULL; }
 
@@ -500,7 +511,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
   rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, attrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
   ldout(cct, 5) << __func__ << " results of ldap search using query \""<< filter << "\": " << ldap_err2string(rc) << dendl;
   if (rc != LDAP_SUCCESS) {
-    ldout(cct, 1) << __func__ << " ldap_search_ext_s failed during client session." 
+    ldout(cct, 5) << __func__ << " ldap_search_ext_s failed during client session." 
       << " Did not find attribute " << searchAttr << " matching value " << searchVal
       << ". Ldap error: " << ldap_err2string(rc) << dendl;
     is_valid = false;
@@ -524,7 +535,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     char** gidNumVals = ldap_get_values(ld, e, gidNumAttr);
 
     if (uidNumVals == NULL || gidNumVals == NULL) {
-      ldout(cct, 1) << __func__ << " ldap search results error: No UID or GID Values found for client " 
+      ldout(cct, 5) << __func__ << " ldap search results error: No UID or GID Values found for client " 
                     << name << ". Lookup failed." << dendl;
       is_valid = false;
       return err;
@@ -571,7 +582,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     rc = ldap_search_ext_s(ld, base_dn.c_str(), LDAP_SCOPE_SUBTREE, filter, gidAttrs, 0, NULL, NULL, NULL, LDAP_NO_LIMIT, &result);
     ldout(cct, 5) << __func__ << " results of ldap search using query \""<< filter << "\": " << ldap_err2string(rc) << dendl;
     if (rc != LDAP_SUCCESS) {
-      ldout(cct, 1) << __func__ << " ldap_search_ext_s failed during client session." 
+      ldout(cct, 5) << __func__ << " ldap_search_ext_s failed during client session." 
         << " Did not find attribute " << searchAttr << " matching value " << searchVal
         << ". Ldap error: " << ldap_err2string(rc) << dendl;
       is_valid = false;
@@ -579,7 +590,7 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     }
 
     if (e == NULL) {
-      ldout(cct, 1) << __func__ << "ldap search results error: No groups' gids found for client " << name << "." << dendl;
+      ldout(cct, 5) << __func__ << "ldap search results error: No groups' gids found for client " << name << "." << dendl;
       is_valid = false;
       return err;
     }
@@ -600,12 +611,12 @@ vector<uint64_t> MDSAuthCaps::ldap_lookup(const string& name, bool& is_valid) {
     ldap_msgfree(result);
 
     if (uidNumber == NULL || gidNumber == NULL || ids.size() <= 2) {
-      ldout(cct, 1) << __func__ << " ldap search results error: one or more of uid, gid, or group gids not found " << dendl;
+      ldout(cct, 5) << __func__ << " ldap search results error: one or more of uid, gid, or group gids not found " << dendl;
       is_valid = false;
       return err;
     }
   } else {
-    ldout(cct, 1) << " ldap search results error: No LDAP entry found for client " << name << ". Lookup failed." << dendl;
+    ldout(cct, 5) << " ldap search results error: No LDAP entry found for client " << name << ". Lookup failed." << dendl;
     is_valid = false;
     return err;
   }
