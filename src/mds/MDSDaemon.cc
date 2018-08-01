@@ -1,4 +1,4 @@
-c// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
+// -*- mode:C++; tab-width:8; c-basic-offset:2; indent-tabs-mode:t -*-
 // vim: ts=8 sw=2 smarttab
 /*
  * Ceph - scalable distributed file system
@@ -1441,12 +1441,9 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         is_valid = false;
         return false;
       }
-<<<<<<< HEAD
-=======
 
       if (s->auth_caps.idmap_required()) 
         s->update_idmap(is_valid);
->>>>>>> 5f3646c2c7d309f5e8b531a86f7015189c94a7b8
     }
   }
   return true;  // we made a decision (see is_valid)
