@@ -1646,6 +1646,7 @@ int Client::make_request(MetaRequest *request,
   // FIXME
   const UserPerm perms2 = UserPerm(100051, 100051);
   request->set_caller_perms(perms2);
+  //request->set_caller_perms(perms);
 
   if (cct->_conf->client_inject_fixed_oldest_tid) {
     ldout(cct, 20) << __func__ << " injecting fixed oldest_client_tid(1)" << dendl;

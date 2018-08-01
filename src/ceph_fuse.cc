@@ -102,8 +102,8 @@ int main(int argc, const char **argv, const char *envp[]) {
       const char* tmpargv[] = {
 	"ceph-fuse",
 	"-V",
-        "-o uid=100051",
-        "-o gid=100051"
+        //"-o uid=100051",
+        //"-o gid=100051"
       };
 
       struct fuse_args fargs = FUSE_ARGS_INIT(2, (char**)tmpargv);
