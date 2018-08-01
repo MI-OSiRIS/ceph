@@ -1441,6 +1441,9 @@ bool MDSDaemon::ms_verify_authorizer(Connection *con, int peer_type,
         is_valid = false;
         return false;
       }
+
+      if (s->auth_caps.idmap_required()) 
+        s->update_idmap(is_valid);
     }
   }
   return true;  // we made a decision (see is_valid)
