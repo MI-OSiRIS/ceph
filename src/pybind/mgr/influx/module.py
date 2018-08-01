@@ -48,6 +48,10 @@ class Module(MgrModule):
             {
                 'name': 'verify_ssl',
                 'default': 'true'
+            },
+            {
+                'name': 'destinations',
+                'default': {}
             }
     ]
 
@@ -78,6 +82,23 @@ class Module(MgrModule):
             "desc": "debug the module",
             "perm": "rw"
         },
+        {
+            "cmd": "config add mgr name=hostname,type=CephString "
+                   "name=username,type=CephString "
+                   "name=password,type=CephString "
+                   "name=interval,type=CephString "
+                   "name=database,type=CephString "
+                   "name=port,type=CephString "
+                   "name=ssl,type=CephString "
+                   "name=verify_ssl,type=CephString ",
+            "desc": "add destination information ",
+            "perm": "rw"
+        },
+        {
+            "cmd": "config rm mgr name=hostname,type=CephString",
+            "desc": "delete destination information ",
+            "perm": "rw"
+        }
     ]
 
     config_keys = {
@@ -97,6 +118,7 @@ class Module(MgrModule):
         self.event = Event()
         self.run = True
         self.config = dict()
+        self.config['destinations'] = []
 
     def get_fsid(self):
         return self.get('mon_map')['fsid']
@@ -266,27 +288,53 @@ class Module(MgrModule):
         verify_ssl = \
             self.get_config("verify_ssl", default=self.config_keys['verify_ssl'])
         self.config['verify_ssl'] = verify_ssl.lower() == 'true'
-        
+
+        #self.log.error("Username: Test: " + str(self.config['username']))
+
+        #get_config_json returns None if key is not set, does not accept default arg
+        # self.config['destinations'] = \
+        #         self.get_store("destinations",
+        #         default={   'hostname':   self.config_keys['hostname'],
+        #                     'username':   self.config_keys['username'],
+        #                     'password':   self.config_keys['password'],
+        #                     'database':   self.config_keys['database'],
+        #                     'ssl':        self.config_keys['ssl'],
+        #                     'verify_ssl': self.config_keys['verify_ssl']})
+
+        num = min([len(x) for x in self.config])
+
+        self.config['destinations'].append({ 'hostname':   self.config['hostname'],
+                'username':   self.config['username'],
+                'password':   self.config['password'],
+                'database':   self.config['database'],
+                'ssl':        self.config['ssl'],
+                'verify_ssl': self.config['verify_ssl']
+        })
+
         self.init_influx_clients()
 
     def init_influx_clients(self):
 
         self.clients = []
 
-        destinations = [
-            {
-                'hostname':   self.config['hostname'],
-                'username':   self.config['username'],
-                'password':   self.config['password'],
-                'database':   self.config['database'],
-                'ssl':        self.config['ssl'],
-                'verify_ssl': self.config['verify_ssl']
-            },
-        ]
+        if not self.config['destinations']:
+            destinations = [
+                {
+                    'hostname':   self.config['hostname'],
+                    'username':   self.config['username'],
+                    'password':   self.config['password'],
+                    'database':   self.config['database'],
+                    'ssl':        self.config['ssl'],
+                    'verify_ssl': self.config['verify_ssl']
+                },
+            ]
+        else:
+            destinations =  self.config['destinations']
+            self.log.warn("Test 2: Debug: " + str(destinations))
 
         for dest in destinations:
             # use global settings if these keys not set in destinations object
-            merge_configs = [ 'port', 'database', 'username', 'password', 'ssl', 'verify_ssl']
+            merge_configs = ['port', 'database', 'username', 'password', 'ssl', 'verify_ssl']
             conf = dict()
 
             for key in merge_configs:
@@ -328,28 +376,26 @@ class Module(MgrModule):
         daemon_stats = self.get_daemon_stats()
         pg_summary = self.get_pg_summary(df_stats[1])
 
+        health = {
+            'MGR_INFLUX_SEND_FAILED': {
+                'severity': 'warning',
+                'summary': "",
+                'detail': []
+            }
+        }
         for client,conf in self.clients:
             # using influx client get_list_database requires admin privs,
             # instead we'll catch the not found exception and inform the user if
             # db can not be created
-            health = {
-                'MGR_INFLUX_SEND_FAILED': {
-                    'severity': 'warning',
-                    'summary': "",
-                    'detail': []
-                }
-            }
             try:
                 client.write_points(df_stats[0], 'ms')
                 client.write_points(daemon_stats, 'ms')
                 client.write_points(self.get_pg_summary(df_stats[1]))
-                self.set_health_checks(dict())
-
             except ConnectionError as e:
                 # InfluxDBClient also has get_host and get_port but since we have the config here anyways...
                 self.log.exception("Failed to connect to Influx host %s:%d", conf['hostname'], conf['port'])
                 health['MGR_INFLUX_SEND_FAILED']['severity'] = 'warning'
-                health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port']) + " \n "
+                health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port'])
                 health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(e)]
                 self.set_health_checks(health)
             except InfluxDBClientError as e:
@@ -359,6 +405,7 @@ class Module(MgrModule):
                                   "manually and grant write privs to user "
                                   "'%s'", conf['database'],
                                   conf['username'])
+                    client.create_database(conf['database'])
                 else:
                     health['MGR_INFLUX_SEND_FAILED']['severity'] = 'warning'
                     health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Failed to send data to InfluxDB'
@@ -367,6 +414,11 @@ class Module(MgrModule):
             except InfluxDBServerError as exception:
                 self.log.exception("Unable to connect to %s:%d with exception: %s", conf['hostname'], conf['port'], str(exception))
                 health['MGR_INFLUX_SEND_FAILED']['summary'] += 'Timeout sending to InfluxDB server at ' + str(self.config['hostname'])+':'+str(self.config['port']) + " \n "
+                health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(exception)]
+                self.set_health_checks(health)
+            except Exception as exception:
+                self.log.exception("Unexpected exception: " + str(exception))
+                health['MGR_INFLUX_SEND_FAILED']['summary'] += "Unexpected error occurred"
                 health['MGR_INFLUX_SEND_FAILED']['detail'] += [str(exception)]
                 self.set_health_checks(health)
 
@@ -388,6 +440,26 @@ class Module(MgrModule):
             self.log.debug('Setting configuration option %s to %s', key, value)
             self.set_config_option(key, value)
             self.set_config(key, value)
+        elif cmd['prefix'] == 'config add mgr':
+            if([dest['hostname'] for dest in self.config['destinations']].__contains__(cmd['hostname'])):
+                return 0, "You already entered that hostname!", ''
+            self.config['destinations'].append(
+                {
+                    'hostname':   cmd['hostname'],
+                    'username':   cmd['username'],
+                    'password':   cmd['password'],
+                    'database':   cmd['database'],
+                    'ssl':        cmd['ssl'] == 'true',
+                    'verify_ssl': cmd['verify_ssl'] == 'true'
+                }
+            )
+            self.init_influx_clients()
+            return 0, "Host: " + cmd['hostname']+ " Username: " + cmd['username'] + " Password: " + cmd['password'] + " Interval: " + cmd['interval'] + " Database: " + cmd['database'] + " SSL: " + cmd['ssl'] + " Verify SSL: " + cmd['verify_ssl'], ''
+        elif cmd['prefix'] == 'config rm mgr':
+            for dest in self.config['destinations']:
+                if(dest['hostname'] == cmd['hostname']):
+                    self.config['destinations'].remove(dest)
+            return 0, "Host: " + cmd['hostname'] + " has been removed.", ''
         elif cmd['prefix'] == 'influx send':
             self.send_to_influx()
             return 0, 'Sending data to Influx', ''
