@@ -36,8 +36,8 @@
 #include "include/cephfs/ceph_statx.h"
 
 #include "fuse_ll.h"
-//#include <fuse.h>
-//#include <fuse_lowlevel.h>
+#include <fuse.h>
+#include <fuse_lowlevel.h>
 
 #define dout_context g_ceph_context
 
@@ -67,10 +67,7 @@ static dev_t new_decode_dev(uint32_t dev)
 	return MKDEV(major, minor);
 }
 
-void update_ctx_ids(fuse_req_t req) {
-  req->ctx.uid = 100051;
-  req->ctx.gid = 100051;
-}
+gid_t gids_tmp[9] = {1000071, 1000072, 1000083, 1000090, 1000106, 1000236, 1000237, 1000263, 1000264};
 
 class CephFuse::Handle {
 public:
@@ -112,7 +109,6 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
   assert(sgids);
   int c = fuse_req_getgroups(req, 0, NULL);
-
   if (c < 0) {
     return c;
   }
@@ -125,13 +121,6 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
     return -ENOMEM;
   }
   c = fuse_req_getgroups(req, c, gids);
-
-  c = 2;
-  delete[] gids;
-  gids = new (std::nothrow) gid_t[c];
-  gids[0] = 100051;
-  gids[1] = 1000071;
-   
   if (c < 0) {
     delete[] gids;
   } else {
@@ -161,7 +150,6 @@ static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
 
 static CephFuse::Handle *fuse_ll_req_prepare(fuse_req_t req)
 {
-  req->ctx.uid = 100051; req->ctx.gid = 100051;
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
   cfuse->set_fuse_req(req);
   return cfuse;
@@ -175,7 +163,7 @@ static void fuse_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
   Inode *i2, *i1 = cfuse->iget(parent); // see below
   int r;
 
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   if (!i1)
@@ -217,7 +205,7 @@ static void fuse_ll_getattr(fuse_req_t req, fuse_ino_t ino,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
   struct stat stbuf;
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
   
   (void) fi; // XXX
@@ -240,7 +228,7 @@ static void fuse_ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
 
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int mask = 0;
@@ -277,7 +265,7 @@ static void fuse_ll_setxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
   CephFuse::Handle *cfuse = fuse_ll_req_prepare(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_setxattr(in, name, value, size, flags, perms);
@@ -292,7 +280,7 @@ static void fuse_ll_listxattr(fuse_req_t req, fuse_ino_t ino, size_t size)
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
   char buf[size];
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_listxattr(in, buf, size, perms);
@@ -317,7 +305,7 @@ static void fuse_ll_getxattr(fuse_req_t req, fuse_ino_t ino, const char *name,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
   char buf[size];
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_getxattr(in, name, buf, size, perms);
@@ -337,7 +325,7 @@ static void fuse_ll_removexattr(fuse_req_t req, fuse_ino_t ino,
   CephFuse::Handle *cfuse = fuse_ll_req_prepare(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_removexattr(in, name, perms);
@@ -354,7 +342,7 @@ static void fuse_ll_opendir(fuse_req_t req, fuse_ino_t ino,
   Inode *in = cfuse->iget(ino);
   void *dirp;
 
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_opendir(in, fi->flags, (dir_result_t **)&dirp,
@@ -375,7 +363,7 @@ static void fuse_ll_readlink(fuse_req_t req, fuse_ino_t ino)
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
   char buf[PATH_MAX + 1];  // leave room for a null terminator
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_readlink(in, buf, sizeof(buf) - 1, perms);
@@ -396,7 +384,7 @@ static void fuse_ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *i2, *i1 = cfuse->iget(parent);
   struct fuse_entry_param fe;
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   memset(&fe, 0, sizeof(fe));
@@ -425,7 +413,7 @@ static void fuse_ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
   struct fuse_entry_param fe;
 
   memset(&fe, 0, sizeof(fe));
-  UserPerm perm(ctx->uid, ctx->gid);
+  UserPerm perm(100051, 100051);
   get_fuse_groups(perm, req);
 #ifdef HAVE_SYS_SYNCFS
   auto fuse_multithreaded = cfuse->client->cct->_conf->get_val<bool>(
@@ -471,7 +459,7 @@ static void fuse_ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
   CephFuse::Handle *cfuse = fuse_ll_req_prepare(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(parent);
-  UserPerm perm(ctx->uid, ctx->gid);
+  UserPerm perm(100051, 100051);
   get_fuse_groups(perm, req);
 
   int r = cfuse->client->ll_unlink(in, name, perm);
@@ -485,7 +473,7 @@ static void fuse_ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
   CephFuse::Handle *cfuse = fuse_ll_req_prepare(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(parent);
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_rmdir(in, name, perms);
@@ -501,7 +489,7 @@ static void fuse_ll_symlink(fuse_req_t req, const char *existing,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *i2, *i1 = cfuse->iget(parent);
   struct fuse_entry_param fe;
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   memset(&fe, 0, sizeof(fe));
@@ -527,7 +515,7 @@ static void fuse_ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(parent);
   Inode *nin = cfuse->iget(newparent);
-  UserPerm perm(ctx->uid, ctx->gid);
+  UserPerm perm(100051, 100051);
   get_fuse_groups(perm, req);
 
   int r = cfuse->client->ll_rename(in, name, nin, newname, perm);
@@ -547,7 +535,7 @@ static void fuse_ll_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
   struct fuse_entry_param fe;
 
   memset(&fe, 0, sizeof(fe));
-  UserPerm perm(ctx->uid, ctx->gid);
+  UserPerm perm(100051, 100051);
   get_fuse_groups(perm, req);
   
   /*
@@ -586,7 +574,7 @@ static void fuse_ll_open(fuse_req_t req, fuse_ino_t ino,
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
   Fh *fh = NULL;
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_open(in, fi->flags, &fh, perms);
@@ -787,7 +775,7 @@ static void fuse_ll_access(fuse_req_t req, fuse_ino_t ino, int mask)
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   Inode *in = cfuse->iget(ino);
 
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->inode_permission(in, perms, mask);
@@ -804,7 +792,7 @@ static void fuse_ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
   struct fuse_entry_param fe;
   Fh *fh = NULL;
 
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   memset(&fe, 0, sizeof(fe));
@@ -839,7 +827,7 @@ static void fuse_ll_statfs(fuse_req_t req, fuse_ino_t ino)
   CephFuse::Handle *cfuse = fuse_ll_req_prepare(req);
   Inode *in = cfuse->iget(ino);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
-  UserPerm perms(ctx->uid, ctx->gid);
+  UserPerm perms(100051, 100051);
   get_fuse_groups(perms, req);
 
   int r = cfuse->client->ll_statfs(in, &stbuf, perms);
@@ -1096,6 +1084,7 @@ void CephFuse::Handle::finalize()
 
 int CephFuse::Handle::init(int argc, const char *argv[])
 {
+
   int r = pthread_key_create(&fuse_req_key, NULL);
   if (r) {
     derr << "pthread_key_create failed." << dendl;
@@ -1354,3 +1343,4 @@ std::string CephFuse::get_mount_point() const
     return "";
   }
 }
+

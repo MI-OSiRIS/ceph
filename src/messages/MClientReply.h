@@ -236,11 +236,34 @@ public:
     head.op = req->get_op();
     head.result = result;
     head.safe = 1;
+    server_uid = -1;
+    server_gid = -1;
+    server_ngroups = 0;
+    idamp = false;
+  }
+
+  ~MClientReply() {
+    if (server_ngroups > 0) delete[] server_groups;
   }
 private:
+  uid_t server_uid; // server_uid/_gid/_groups store the results from server-side idmapping verification
+  gid_t server_gid;
+  gid_t* server_groups;
+  size_t server_ngroups; // number of server-side groups
+  bool idmap; // is idmap valid?
   ~MClientReply() override {}
 
 public:
+  void set_idmap_ids(uid_t _uid, gid_t _gid, gid_t* groups_, size_t ngroups_) {
+    server_uid = uid_;
+    server_gid = gid_;
+    server_groups = new (std::nothrow) gid_t[ngroups_];
+    server_ngroups = ngroups_;
+    for (size_t i = 0; i < ngroups_; ++i) {
+      server_groups[i] = groups_[i];
+    }
+  } 
+
   const char *get_type_name() const override { return "creply"; }
   void print(ostream& o) const override {
     o << "client_reply(???:" << get_tid();

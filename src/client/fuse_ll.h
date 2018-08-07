@@ -13,6 +13,32 @@
  */
 
 #define FUSE_USE_VERSION 30
+#include <fuse.h>
+#include <fuse_lowlevel.h>
+
+struct fuse_req {
+	struct fuse_session *se;
+	uint64_t unique;
+	int ctr;
+	pthread_mutex_t lock;
+	struct fuse_ctx ctx;
+	struct fuse_chan *ch;
+	int interrupted;
+	unsigned int ioctl_64bit : 1;
+	union {
+		struct {
+			uint64_t unique;
+		} i;
+		struct {
+			fuse_interrupt_func_t func;
+			void *data;
+		} ni;
+	} u;
+	struct fuse_req *next;
+	struct fuse_req *prev;
+};
+
+void update_ctx_ids(fuse_req_t req);
 
 class CephFuse {
 public:

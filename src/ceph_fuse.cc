@@ -102,8 +102,6 @@ int main(int argc, const char **argv, const char *envp[]) {
       const char* tmpargv[] = {
 	"ceph-fuse",
 	"-V",
-        //"-o uid=100051",
-        //"-o gid=100051"
       };
 
       struct fuse_args fargs = FUSE_ARGS_INIT(2, (char**)tmpargv);
@@ -268,9 +266,7 @@ int main(int argc, const char **argv, const char *envp[]) {
     }
     
     client->update_metadata("mount_point", cfuse->get_mount_point());
-    
-    perms = UserPerm(100051, 100051);
-    //perms = client->pick_my_perms();
+    perms = client->pick_my_perms();
     {
       // start up fuse
       // use my argc, argv (make sure you pass a mount point!)
