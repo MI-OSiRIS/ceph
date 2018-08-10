@@ -129,9 +129,7 @@ void CephFuse::Handle::update_req_perms(fuse_req_t& req) {
 static CephFuse::Handle *fuse_ll_req_prepare(fuse_req_t req)
 {
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
-  derr << __func__ << " ctx_uid before = " << req->ctx.uid << "; ctx_gid = " << req->ctx.gid << dendl;
   cfuse->update_req_perms(req);
-  derr << __func__ << " ctx_uid after = " << req->ctx.uid << "; ctx_gid = " << req->ctx.gid << dendl;
   cfuse->set_fuse_req(req);
   return cfuse;
 }

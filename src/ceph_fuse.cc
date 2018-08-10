@@ -262,7 +262,6 @@ int main(int argc, const char **argv, const char *envp[]) {
     cfuse = new CephFuse(client, forker.get_signal_fd());
 
     r = cfuse->init(newargc, newargv);
-    cerr << perms.uid() << ';' << perms.gid() << std::endl;
     cfuse->set_perms(perms);
     if (r != 0) {
       cerr << "ceph-fuse[" << getpid() << "]: fuse failed to initialize" << std::endl;
