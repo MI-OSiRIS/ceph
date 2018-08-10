@@ -1371,9 +1371,27 @@ void Server::early_reply(MDRequestRef& mdr, CInode *tracei, CDentry *tracedn)
     return;
   }
 
-
+  Session *session = mdr->session;
+  
   MClientReply *reply = new MClientReply(req, 0);
   reply->set_unsafe();
+
+  if (session->idmap_required()) {
+    uid_t server_uid = session->get_server_uid();
+    gid_t server_gid = session->get_server_gid();
+    size_t server_ngroups = session->get_server_ngroups();
+    gid_t* gids_tmp = session->get_server_groups();
+    gid_t* server_groups = new (std::nothrow) gid_t[server_ngroups];
+    dout(1) << __func__ << " server_uid = " << server_uid << ", server_gid = " << server_gid << dendl;
+    for (size_t i = 0; i < server_ngroups; ++i) {
+      server_groups[i] = gids_tmp[i];
+      dout(1) << __func__ << " server_groups[" << i << "] = " << server_groups[i] << dendl;
+    }
+    reply->set_idmap_ids(server_uid, server_gid, server_ngroups, server_groups);
+  } else {
+    dout(1) << __func__ << " called, but session->idmap not set" << dendl;
+  }
+
 
   // mark xlocks "done", indicating that we are exposing uncommitted changes.
   //
@@ -1497,6 +1515,25 @@ void Server::reply_client_request(MDRequestRef& mdr, MClientReply *reply)
     reply->set_extra_bl(mdr->reply_extra_bl);
 
     reply->set_mdsmap_epoch(mds->mdsmap->get_epoch());
+
+    if (session->idmap_required()) {
+      uid_t server_uid = session->get_server_uid();
+      gid_t server_gid = session->get_server_gid();
+      size_t server_ngroups = session->get_server_ngroups();
+      gid_t* server_groups = session->get_server_groups();
+      reply->set_idmap_ids(server_uid, server_gid, server_ngroups, server_groups);
+
+      dout(1) << __func__ << " reply->server_uid = " << reply->get_server_uid() << ", reply->server_gid = " << reply->get_server_gid() << dendl;
+      gid_t* gids_tmp = reply->get_server_groups();
+      for (size_t i = 0; i < reply->get_server_ngroups(); ++i) {
+        dout(1) << __func__ << " reply->server_groups[" << i << "] = " << gids_tmp[i] << dendl;
+      }
+      dout(1) << __func__ << " reply->idmap = " << reply->idmap_required() << dendl;
+    } else {
+      dout(1) << __func__ << " called, but session->idmap not set" << dendl;
+    }
+
+
     req->get_connection()->send_message(reply);
   }
 
@@ -1665,7 +1702,7 @@ void Server::handle_client_request(MClientRequest *req)
     }
   }
 
-  // Update information if idmap lookup was performed
+  /*// Update information if idmap lookup was performed
   if (session->idmap_required()) {
     std::vector<unsigned int> gid_vec = session->get_gid_list();
     const gid_t* gid_list = &gid_vec[0];
@@ -1675,7 +1712,7 @@ void Server::handle_client_request(MClientRequest *req)
     req->set_gid_list(gid_vec.size(), gid_list);
 
     dout(4) << __func__ << " updated request " << *req << dendl;
-  }
+  }*/
 
   // old mdsmap?
   if (req->get_mdsmap_epoch() < mds->mdsmap->get_epoch()) {
@@ -1703,7 +1740,23 @@ void Server::handle_client_request(MClientRequest *req)
 	  encode(created, extra);
 	  reply->set_extra_bl(extra);
 	}
-	req->get_connection()->send_message(reply);
+	if (session->idmap_required()) {
+          uid_t server_uid = session->get_server_uid();
+          gid_t server_gid = session->get_server_gid();
+          size_t server_ngroups = session->get_server_ngroups();
+          gid_t* gids_tmp = session->get_server_groups();
+          gid_t* server_groups = new (std::nothrow) gid_t[server_ngroups];
+          dout(1) << __func__ << " server_uid = " << server_uid << ", server_gid = " << server_gid << dendl;
+          for (size_t i = 0; i < server_ngroups; ++i) {
+            server_groups[i] = gids_tmp[i];
+            dout(1) << __func__ << " server_groups[" << i << "] = " << server_groups[i] << dendl;
+          }
+          reply->set_idmap_ids(server_uid, server_gid, server_ngroups, server_groups);
+        } else {
+          dout(1) << __func__ << " called, but session->idmap not set" << dendl;
+        }
+
+        req->get_connection()->send_message(reply);
 
 	if (req->is_queued_for_replay())
 	  mds->queue_one_replay();

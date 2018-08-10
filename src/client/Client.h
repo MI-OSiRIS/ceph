@@ -355,6 +355,9 @@ protected:
   void dump_mds_requests(Formatter *f);
   void dump_mds_sessions(Formatter *f);
 
+  int make_request(MetaRequest *req, UserPerm& perms,
+		   InodeRef *ptarget = 0, bool *pcreated = 0,
+		   mds_rank_t use_mds=-1, bufferlist *pdirbl=0);
   int make_request(MetaRequest *req, const UserPerm& perms,
 		   InodeRef *ptarget = 0, bool *pcreated = 0,
 		   mds_rank_t use_mds=-1, bufferlist *pdirbl=0);
@@ -950,7 +953,7 @@ private:
   bool _ll_forget(Inode *in, int count);
 
 public:
-  int mount(const std::string &mount_root, const UserPerm& perms,
+  int mount(const std::string &mount_root, UserPerm& perms,
 	    bool require_mds=false);
   void unmount();
 
@@ -1271,5 +1274,7 @@ class StandaloneClient : public Client
   int init() override;
   void shutdown() override;
 };
+
+ostream& operator<<(ostream &out, const UserPerm& perm);
 
 #endif

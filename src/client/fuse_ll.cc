@@ -67,50 +67,13 @@ static dev_t new_decode_dev(uint32_t dev)
 	return MKDEV(major, minor);
 }
 
-void update_ctx_ids(fuse_req_t req) {
-  req->ctx.uid = 100051;
-  req->ctx.gid = 100051;
-}
-
-class CephFuse::Handle {
-public:
-  Handle(Client *c, int fd);
-  ~Handle();
-
-  int init(int argc, const char *argv[]);
-  int start();
-  int loop();
-  void finalize();
-
-  uint64_t fino_snap(uint64_t fino);
-  uint64_t make_fake_ino(inodeno_t ino, snapid_t snapid);
-  Inode * iget(fuse_ino_t fino);
-  void iput(Inode *in);
-
-  int fd_on_success;
-  Client *client;
-
-  struct fuse_chan *ch;
-  struct fuse_session *se;
-  char *mountpoint;
-
-  Mutex stag_lock;
-  int last_stag;
-
-  ceph::unordered_map<uint64_t,int> snap_stag_map;
-  ceph::unordered_map<int,uint64_t> stag_snap_map;
-
-  pthread_key_t fuse_req_key = 0;
-  void set_fuse_req(fuse_req_t);
-  fuse_req_t get_fuse_req();
-
-  struct fuse_args args;
-};
-
 static int getgroups(fuse_req_t req, gid_t **sgids)
 {
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
+  return 0;
+  
   assert(sgids);
+
   int c = fuse_req_getgroups(req, 0, NULL);
 
   if (c < 0) {
@@ -124,14 +87,9 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
   if (!gids) {
     return -ENOMEM;
   }
+
   c = fuse_req_getgroups(req, c, gids);
 
-  c = 2;
-  delete[] gids;
-  gids = new (std::nothrow) gid_t[c];
-  gids[0] = 100051;
-  gids[1] = 1000071;
-   
   if (c < 0) {
     delete[] gids;
   } else {
@@ -144,6 +102,10 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
 
 static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
 {
+  if (req->server_ngroups > 0) {
+    perms.init_gids(req->server_groups, req->server_ngroups);
+    return;
+  }
   if (g_conf->get_val<bool>("fuse_set_user_groups")) {
 
     gid_t *gids = NULL;
@@ -158,11 +120,24 @@ static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
   }
 }
 
+void CephFuse::Handle::update_req_perms(fuse_req_t& req) {
+  req->ctx.uid = perms.uid();
+  req->ctx.gid = perms.gid();
+  if (req->server_ngroups > 0) {
+    delete[] req->server_groups;
+  }
+  req->server_ngroups = perms.get_ngroups();
+  gid_t* gids_tmp = perms.get_groups();
+  req->server_groups = new (std::nothrow) gid_t[req->server_ngroups];
+  for (size_t i = 0; i < req->server_ngroups; ++i) {
+    req->server_groups[i] = gids_tmp[i]; 
+  }
+}
 
 static CephFuse::Handle *fuse_ll_req_prepare(fuse_req_t req)
 {
-  req->ctx.uid = 100051; req->ctx.gid = 100051;
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
+  cfuse->update_req_perms(req);
   cfuse->set_fuse_req(req);
   return cfuse;
 }
@@ -1306,6 +1281,10 @@ uint64_t CephFuse::Handle::make_fake_ino(inodeno_t ino, snapid_t snapid)
   }
 }
 
+void CephFuse::Handle::set_perms(UserPerm& perms_) {
+  perms = perms_;
+}
+
 void CephFuse::Handle::set_fuse_req(fuse_req_t req)
 {
   pthread_setspecific(fuse_req_key, (void*)req);
@@ -1333,6 +1312,7 @@ int CephFuse::init(int argc, const char *argv[])
 
 int CephFuse::start()
 {
+  _handle->set_perms(perms);
   return _handle->start();
 }
 
@@ -1344,6 +1324,10 @@ int CephFuse::loop()
 void CephFuse::finalize()
 {
   return _handle->finalize();
+}
+
+void CephFuse::set_perms(UserPerm& perms_) {
+  perms = perms_;
 }
 
 std::string CephFuse::get_mount_point() const

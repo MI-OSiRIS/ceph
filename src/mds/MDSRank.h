@@ -188,8 +188,6 @@ class MDSRank {
     Session *get_session(client_t client) {
       return sessionmap.get_session(entity_name_t::CLIENT(client.v));
     }
-    Session *get_session(MClientRequest *m);
-    Session *get_session(MClientCaps *m);
     Session *get_session(Message *m);
 
     PerfCounters       *logger, *mlogger;

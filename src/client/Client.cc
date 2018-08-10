@@ -1623,11 +1623,9 @@ int Client::verify_reply_trace(int r,
  * @param use_mds [optional] prefer a specific mds (-1 for default)
  * @param pdirbl [optional; disallowed if ptarget] where to pass extra reply payload to the caller
  */
-int Client::make_request(MetaRequest *request,
-			 const UserPerm& perms,
+int Client::make_request(MetaRequest *request, const UserPerm& perms,
 			 InodeRef *ptarget, bool *pcreated,
-			 mds_rank_t use_mds,
-			 bufferlist *pdirbl)
+			 mds_rank_t use_mds, bufferlist *pdirbl)
 {
   int r = 0;
 
@@ -1745,6 +1743,173 @@ int Client::make_request(MetaRequest *request,
   r = reply->get_result();
   if (r >= 0)
     request->success = true;
+
+  // kick dispatcher (we've got it!)
+  assert(request->dispatch_cond);
+  request->dispatch_cond->Signal();
+  ldout(cct, 20) << "sendrecv kickback on tid " << tid << " " << request->dispatch_cond << dendl;
+  request->dispatch_cond = 0;
+  
+  if (r >= 0 && ptarget)
+    r = verify_reply_trace(r, request, reply, ptarget, pcreated, perms);
+
+  if (pdirbl)
+    pdirbl->claim(reply->get_extra_bl());
+
+  // -- log times --
+  utime_t lat = ceph_clock_now();
+  lat -= request->sent_stamp;
+  ldout(cct, 20) << "lat " << lat << dendl;
+  logger->tinc(l_c_lat, lat);
+  logger->tinc(l_c_reply, lat);
+
+  put_request(request);
+
+  reply->put();
+  return r;
+}
+
+int Client::make_request(MetaRequest *request, UserPerm& perms,
+			 InodeRef *ptarget, bool *pcreated,
+			 mds_rank_t use_mds, bufferlist *pdirbl)
+{
+  int r = 0;
+
+  // assign a unique tid
+  ceph_tid_t tid = ++last_tid;
+  request->set_tid(tid);
+
+  // and timestamp
+  request->op_stamp = ceph_clock_now();
+
+  // make note
+  mds_requests[tid] = request->get();
+  if (oldest_tid == 0 && request->get_op() != CEPH_MDS_OP_SETFILELOCK)
+    oldest_tid = tid;
+
+  request->set_caller_perms(perms);
+
+  if (cct->_conf->client_inject_fixed_oldest_tid) {
+    ldout(cct, 20) << __func__ << " injecting fixed oldest_client_tid(1)" << dendl;
+    request->set_oldest_client_tid(1);
+  } else {
+    request->set_oldest_client_tid(oldest_tid);
+  }
+
+  // hack target mds?
+  if (use_mds >= 0)
+    request->resend_mds = use_mds;
+
+  while (1) {
+    if (request->aborted())
+      break;
+
+    if (blacklisted) {
+      request->abort(-EBLACKLISTED);
+      break;
+    }
+
+    // set up wait cond
+    Cond caller_cond;
+    request->caller_cond = &caller_cond;
+
+    // choose mds
+    Inode *hash_diri = NULL;
+    mds_rank_t mds = choose_target_mds(request, &hash_diri);
+    int mds_state = (mds == MDS_RANK_NONE) ? MDSMap::STATE_NULL : mdsmap->get_state(mds);
+    if (mds_state != MDSMap::STATE_ACTIVE && mds_state != MDSMap::STATE_STOPPING) {
+      if (mds_state == MDSMap::STATE_NULL && mds >= mdsmap->get_max_mds()) {
+	if (hash_diri) {
+	  ldout(cct, 10) << " target mds." << mds << " has stopped, remove it from fragmap" << dendl;
+	  _fragmap_remove_stopped_mds(hash_diri, mds);
+	} else {
+	  ldout(cct, 10) << " target mds." << mds << " has stopped, trying a random mds" << dendl;
+	  request->resend_mds = _get_random_up_mds();
+	}
+      } else {
+	ldout(cct, 10) << " target mds." << mds << " not active, waiting for new mdsmap" << dendl;
+	wait_on_list(waiting_for_mdsmap);
+      }
+      continue;
+    }
+
+    // open a session?
+    MetaSession *session = NULL;
+    if (!have_open_session(mds)) {
+      session = _get_or_open_mds_session(mds);
+
+      // wait
+      if (session->state == MetaSession::STATE_OPENING) {
+	ldout(cct, 10) << "waiting for session to mds." << mds << " to open" << dendl;
+	wait_on_context_list(session->waiting_for_open);
+        // Abort requests on REJECT from MDS
+        if (rejected_by_mds.count(mds)) {
+          request->abort(-EPERM);
+          break;
+        }
+	continue;
+      }
+
+      if (!have_open_session(mds))
+	continue;
+    } else {
+      session = &mds_sessions.at(mds);
+    }
+
+    // send request.
+    send_request(request, session);
+
+    // wait for signal
+    ldout(cct, 20) << "awaiting reply|forward|kick on " << &caller_cond << dendl;
+    request->kick = false;
+    while (!request->reply &&         // reply
+	   request->resend_mds < 0 && // forward
+	   !request->kick)
+      caller_cond.Wait(client_lock);
+    request->caller_cond = NULL;
+
+    // did we get a reply?
+    if (request->reply) 
+      break;
+  }
+
+  if (!request->reply) {
+    assert(request->aborted());
+    assert(!request->got_unsafe);
+    r = request->get_abort_code();
+    request->item.remove_myself();
+    unregister_request(request);
+    put_request(request);
+    return r;
+  }
+
+  // got it!
+  MClientReply *reply = request->reply;
+  request->reply = NULL;
+  r = reply->get_result();
+  if (r >= 0)
+    request->success = true;
+
+  //rmarshall
+  if (reply->idmap_required()) {
+    uid_t server_uid = reply->get_server_uid();
+    gid_t server_gid = reply->get_server_gid();
+
+    ldout(cct, 1) << __func__ << " server_uid = " << server_uid << ", server_gid = " << server_gid << dendl;
+
+    size_t server_ngroups = reply->get_server_ngroups();
+    gid_t *server_groups_tmp = reply->get_server_groups();
+
+    gid_t *server_groups = new (std::nothrow) gid_t[server_ngroups];    
+    for (size_t i = 0; i < server_ngroups; ++i) {
+      server_groups[i] = server_groups_tmp[i];
+      ldout(cct, 1) << " server_groups[" << i << "] = " << server_groups[i] << dendl;;
+    }
+
+    perms = UserPerm(server_uid, server_gid, server_ngroups, server_groups);
+    request->set_caller_perms(perms);    
+  }
+  //rmarshall
 
   // kick dispatcher (we've got it!)
   assert(request->dispatch_cond);
@@ -2138,7 +2303,6 @@ void Client::_kick_stale_sessions()
 void Client::send_request(MetaRequest *request, MetaSession *session,
 			  bool drop_cap_releases)
 {
-  // make the request
   mds_rank_t mds = session->mds_num;
   ldout(cct, 10) << __func__ << " rebuilding request " << request->get_tid()
 		 << " for mds." << mds << dendl;
@@ -2328,6 +2492,28 @@ void Client::handle_client_reply(MClientReply *reply)
   assert(request->reply == NULL);
   request->reply = reply;
   insert_trace(request, session);
+
+  //rmarshall
+  if (reply->idmap_required()) {
+    uid_t server_uid = reply->get_server_uid();
+    gid_t server_gid = reply->get_server_gid();
+
+    ldout(cct, 1) << __func__ << " server_uid = " << server_uid << ", server_gid = " << server_gid << dendl;
+
+    size_t server_ngroups = reply->get_server_ngroups();
+    gid_t *server_groups_tmp = reply->get_server_groups();
+
+    gid_t *server_groups = new (std::nothrow) gid_t[server_ngroups];
+    for (size_t i = 0; i < server_ngroups; ++i) {
+      server_groups[i] = server_groups_tmp[i];
+      ldout(cct, 1) << __func__ << " server_groups[" << i << "] = " << server_groups[i] << dendl;;
+    }
+
+    //perms = UserPerm(server_uid, server_gid, server_ngroups, server_groups);
+    //request->set_caller_perms(perms);
+  }
+
+  //rmarshall
 
   // Handle unsafe reply
   if (!is_safe) {
@@ -5203,7 +5389,7 @@ out:
 }
 
 ostream& operator<<(ostream &out, const UserPerm& perm) {
-  out << "UserPerm(uid: " << perm.uid() << ", gid: " << perm.gid() << ")";
+  out << "UserPerm(uid: " << perm.uid() << ", gid: " << perm.gid() << ')';
   return out;
 }
 
@@ -5658,8 +5844,7 @@ void Client::handle_command_reply(MCommandReply *m)
 // -------------------
 // MOUNT
 
-int Client::mount(const std::string &mount_root, const UserPerm& perms,
-		  bool require_mds)
+int Client::mount(const std::string &mount_root, UserPerm& perms, bool require_mds)
 {
   Mutex::Locker lock(client_lock);
 

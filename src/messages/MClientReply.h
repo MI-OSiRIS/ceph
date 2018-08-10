@@ -239,22 +239,28 @@ public:
     server_uid = -1;
     server_gid = -1;
     server_ngroups = 0;
-    idamp = false;
+    idmap = false;
   }
 
-  ~MClientReply() {
-    if (server_ngroups > 0) delete[] server_groups;
-  }
 private:
   uid_t server_uid; // server_uid/_gid/_groups store the results from server-side idmapping verification
   gid_t server_gid;
-  gid_t* server_groups;
   size_t server_ngroups; // number of server-side groups
+  gid_t* server_groups;
   bool idmap; // is idmap valid?
-  ~MClientReply() override {}
+  ~MClientReply() override {
+    if (server_ngroups > 0) delete[] server_groups; 
+  }
 
 public:
-  void set_idmap_ids(uid_t _uid, gid_t _gid, gid_t* groups_, size_t ngroups_) {
+
+  uid_t get_server_uid() { return server_uid; }
+  gid_t get_server_gid() { return server_gid; }
+  size_t get_server_ngroups() { return server_ngroups; }
+  gid_t* get_server_groups() { return server_groups; }
+  bool idmap_required() { return idmap; }
+
+  void set_idmap_ids(uid_t uid_, gid_t gid_, size_t ngroups_, gid_t* groups_) {
     server_uid = uid_;
     server_gid = gid_;
     server_groups = new (std::nothrow) gid_t[ngroups_];
@@ -262,7 +268,9 @@ public:
     for (size_t i = 0; i < ngroups_; ++i) {
       server_groups[i] = groups_[i];
     }
-  } 
+    idmap = true;
+  }
+
 
   const char *get_type_name() const override { return "creply"; }
   void print(ostream& o) const override {

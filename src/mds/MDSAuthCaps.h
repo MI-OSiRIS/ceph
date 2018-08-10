@@ -16,11 +16,6 @@
 #ifndef MDS_AUTH_CAPS_H
 #define MDS_AUTH_CAPS_H
 
-#if defined(HAVE_OPENLDAP)
-#define LDAP_DEPRECATED 1
-#include "ldap.h"
-#endif
-
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -165,13 +160,6 @@ public:
 		  uid_t uid, gid_t gid, const vector<uint64_t> *caller_gid_list,
 		  unsigned mask, uid_t new_uid, gid_t new_gid) const;
   bool path_capable(std::string_view inode_path) const;
-
-  // idmap functions
-  vector<uint64_t> update_ids(const string& name, bool& is_valid);
-  string get_ldap_bindpw();
-  vector<string> get_idmap_backend();
-  vector<uint64_t> ldap_lookup(const string& name, bool& is_valid);
-
   friend std::ostream &operator<<(std::ostream &out, const MDSAuthCaps &cap);
 };
 

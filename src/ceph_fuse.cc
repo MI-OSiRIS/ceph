@@ -285,6 +285,7 @@ int main(int argc, const char **argv, const char *envp[]) {
         goto out_shutdown;
       }
     }
+    cfuse->set_perms(perms);
 
     r = cfuse->start();
     if (r != 0) {
