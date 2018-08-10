@@ -74,6 +74,7 @@ int main(int argc, const char **argv, const char *envp[]) {
   //cerr << "ceph-fuse starting " << myrank << "/" << world << std::endl;
   std::vector<const char*> args;
   argv_to_vec(argc, argv, args);
+  
   if (args.empty()) {
     cerr << argv[0] << ": -h or --help for usage" << std::endl;
     exit(1);
@@ -91,6 +92,12 @@ int main(int argc, const char **argv, const char *envp[]) {
   auto cct = global_init(&defaults, args, CEPH_ENTITY_TYPE_CLIENT,
 			 CODE_ENVIRONMENT_DAEMON,
 			 CINIT_FLAG_UNPRIVILEGED_DAEMON_DEFAULTS);
+
+  uid_t client_uid = -1;
+  gid_t client_gid = -1;
+  size_t client_ngroups = 0;
+  gid_t* client_groups = NULL;
+  std::string val;
 
   for (auto i = args.begin(); i != args.end();) {
     if (ceph_argparse_double_dash(args, i)) {
@@ -111,6 +118,16 @@ int main(int argc, const char **argv, const char *envp[]) {
       assert(fargs.allocated);
       fuse_opt_free_args(&fargs);
       exit(0);
+    } else if (ceph_argparse_witharg(args, i, &val, "--uid", (char*)NULL)) {
+      client_uid = stoi(val);
+    } else if (ceph_argparse_witharg(args, i, &val, "--gid", (char*)NULL)) {
+      client_gid = stoi(val);
+    } else if (ceph_argparse_witharg(args, i, &val, "--groups", (char*)NULL)) {
+      std::vector<gid_t> groups_v; std::istringstream ss(val); std::string token;
+      while(std::getline(ss, token, ',')) { groups_v.push_back(stoi(token)); } 
+      client_ngroups = groups_v.size();
+      client_groups = new (std::nothrow) gid_t[client_ngroups];
+      for (size_t i = 0; i < groups_v.size(); ++i) { client_groups[i] = groups_v[i]; }
     } else {
       ++i;
     }
@@ -213,12 +230,12 @@ int main(int argc, const char **argv, const char *envp[]) {
       }
     } tester;
 
-
     // get monmap
     Messenger *messenger = nullptr;
     StandaloneClient *client;
     CephFuse *cfuse;
     UserPerm perms;
+    if (client_ngroups > 0) { perms = UserPerm(client_uid, client_gid, client_ngroups, client_groups); }
     int tester_r = 0;
     void *tester_rp = nullptr;
 
@@ -245,6 +262,8 @@ int main(int argc, const char **argv, const char *envp[]) {
     cfuse = new CephFuse(client, forker.get_signal_fd());
 
     r = cfuse->init(newargc, newargv);
+    cerr << perms.uid() << ';' << perms.gid() << std::endl;
+    cfuse->set_perms(perms);
     if (r != 0) {
       cerr << "ceph-fuse[" << getpid() << "]: fuse failed to initialize" << std::endl;
       goto out_messenger_start_failed;
@@ -265,7 +284,11 @@ int main(int argc, const char **argv, const char *envp[]) {
     }
     
     client->update_metadata("mount_point", cfuse->get_mount_point());
-    perms = client->pick_my_perms();
+
+    if (client_ngroups == 0) {
+      perms = client->pick_my_perms();
+    } 
+
     {
       // start up fuse
       // use my argc, argv (make sure you pass a mount point!)
@@ -299,6 +322,8 @@ int main(int argc, const char **argv, const char *envp[]) {
     tester_r = static_cast<int>(reinterpret_cast<uint64_t>(tester_rp));
     cerr << "ceph-fuse[" << getpid() << "]: fuse finished with error " << r
 	 << " and tester_r " << tester_r <<std::endl;
+
+    delete[] client_groups;
 
   out_client_unmount:
     client->unmount();
