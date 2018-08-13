@@ -95,6 +95,11 @@ class Module(MgrModule):
             "perm": "rw"
         },
         {
+            "cmd": "config add mgr name=hostname,type=CephString ",
+            "desc": "add destination information ",
+            "perm": "rw"
+        },
+        {
             "cmd": "config rm mgr name=hostname,type=CephString",
             "desc": "delete destination information ",
             "perm": "rw"
@@ -440,21 +445,48 @@ class Module(MgrModule):
             self.log.debug('Setting configuration option %s to %s', key, value)
             self.set_config_option(key, value)
             self.set_config(key, value)
+        # elif cmd['prefix'] == 'config add mgr':
+        #     if([dest['hostname'] for dest in self.config['destinations']].__contains__(cmd['hostname'])):
+        #         return 0, "You already entered that hostname!", ''
+        #     self.config['destinations'].append(
+        #         {
+        #             'hostname':   cmd['hostname'],
+        #             'username':   cmd['username'],
+        #             'password':   cmd['password'],
+        #             'database':   cmd['database'],
+        #             'ssl':        cmd['ssl'] == 'true',
+        #             'verify_ssl': cmd['verify_ssl'] == 'true'
+        #         }
+        #     )
+        #     self.init_influx_clients()
+        #     return 0, "Host: " + cmd['hostname']+ " Username: " + cmd['username'] + " Password: " + cmd['password'] + " Interval: " + cmd['interval'] + " Database: " + cmd['database'] + " SSL: " + cmd['ssl'] + " Verify SSL: " + cmd['verify_ssl'], ''
         elif cmd['prefix'] == 'config add mgr':
-            if([dest['hostname'] for dest in self.config['destinations']].__contains__(cmd['hostname'])):
-                return 0, "You already entered that hostname!", ''
-            self.config['destinations'].append(
-                {
-                    'hostname':   cmd['hostname'],
-                    'username':   cmd['username'],
-                    'password':   cmd['password'],
-                    'database':   cmd['database'],
-                    'ssl':        cmd['ssl'] == 'true',
-                    'verify_ssl': cmd['verify_ssl'] == 'true'
-                }
-            )
+            if(len(cmd) < 8):
+                destination = {}
+                destination['hostname'] = cmd['hostname'].split("=")[1]
+                self.config['destinations'].append(destination)
+            else:
+                destination = {}
+                values = cmd.values()
+                for value in values:
+                    if(value.__contains__("=")):
+                        value_split = value.split("=")
+                        if(["hostname", "username", "password", "interval",
+                        "database", "port", "ssl", "verify_ssl"].__contains__(value_split[0])):
+                            if(value_split[0] == "ssl" or value_split[0] == "verify_ssl"):
+                                destination[value_split[0]] = value_split[1] == "true"
+                            else:
+                                destination[value_split[0]] = value_split[1]
+
+                self.log.warn("Destination dict is below")
+                self.log.warn(destination)
+                if([dest['hostname'] for dest in self.config['destinations']].__contains__(destination['hostname'])):
+                    return 0, "You already entered that hostname!", ''
+
+                self.config['destinations'].append(destination)
             self.init_influx_clients()
-            return 0, "Host: " + cmd['hostname']+ " Username: " + cmd['username'] + " Password: " + cmd['password'] + " Interval: " + cmd['interval'] + " Database: " + cmd['database'] + " SSL: " + cmd['ssl'] + " Verify SSL: " + cmd['verify_ssl'], ''
+            self.send_to_influx()
+            return 0, "Destination added.", ''
         elif cmd['prefix'] == 'config rm mgr':
             for dest in self.config['destinations']:
                 if(dest['hostname'] == cmd['hostname']):
