@@ -84,18 +84,13 @@ class Module(MgrModule):
         },
         {
             "cmd": "influx dest-add name=hostname,type=CephString "
-                   "name=username,type=CephString "
-                   "name=password,type=CephString "
-                   "name=interval,type=CephString "
-                   "name=database,type=CephString "
-                   "name=port,type=CephString "
-                   "name=ssl,type=CephString "
-                   "name=verify_ssl,type=CephString ",
-            "desc": "add destination information ",
-            "perm": "rw"
-        },
-        {
-            "cmd": "influx dest-add name=hostname,type=CephString ",
+                   "name=username,req=false,type=CephString "
+                   "name=password,req=false,type=CephString "
+                   "name=interval,req=false,type=CephString "
+                   "name=database,req=false,type=CephString "
+                   "name=port,req=false,type=CephString "
+                   "name=ssl,req=false,type=CephString "
+                   "name=verify_ssl,req=false,type=CephString ",
             "desc": "add destination information ",
             "perm": "rw"
         },
@@ -437,22 +432,17 @@ class Module(MgrModule):
         elif cmd['prefix'] == 'influx dest-add':
             destination = {}
             is_duplicate = lambda hostname: [dest['hostname'] for dest in self.config['destinations']].__contains__(hostname)
-            if(len(cmd) < 8):
-                destination['hostname'] = cmd['hostname'].split("=")[1] if cmd['hostname'].__contains__("=") else cmd['hostname']
-                if is_duplicate(destination['hostname']):
-                    return 0, "You already entered that hostname!", ''
-                self.config['destinations'].append(destination)
-            else:
-                values = cmd.values()
-                for value in values:
-                    if(value.__contains__("=")):
-                        value_split = value.split("=")
-                        self.log.warn("Value split 1: " + str(value_split[1]))
-                        if not(value_split[1] == "default"):
-                            destination[value_split[0]] = self.perfect_config_option(value_split[0], value_split[1])
-                if(is_duplicate(destination['hostname'])):
-                    return 0, "You already entered that hostname!", ''
-                self.config['destinations'].append(destination)
+            values = cmd.values()
+            for value in values:
+                if(value.__contains__("=")):
+                    value_split = value.split("=")
+                    if not(value_split[1] == "default"):
+                        destination[value_split[0]] = self.perfect_config_option(value_split[0], value_split[1])
+                else:
+                    return 0, "You're not using the proper formatting. Please refer to the docs.", ''
+            if(is_duplicate(destination['hostname'])):
+                return 0, "You already entered that hostname!", ''
+            self.config['destinations'].append(destination)
             self.init_influx_clients()
             self.send_to_influx()
             return 0, "Destination added.", ''
