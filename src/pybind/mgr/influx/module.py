@@ -321,7 +321,6 @@ class Module(MgrModule):
             ]
         else:
             destinations =  self.config['destinations']
-            self.log.warn("Test 2: Debug: " + str(destinations))
         for dest in destinations:
             # use global settings if these keys not set in destinations object
             merge_configs = ['port', 'database', 'username', 'password', 'ssl', 'verify_ssl']
@@ -431,16 +430,13 @@ class Module(MgrModule):
             self.log.debug('Setting configuration option %s to %s', key, value)
         elif cmd['prefix'] == 'influx dest-add':
             destination = {}
-            is_duplicate = lambda hostname: [dest['hostname'] for dest in self.config['destinations']].__contains__(hostname)
             values = cmd.values()
             for value in values:
                 if(value.__contains__("=")):
                     value_split = value.split("=")
                     if not(value_split[1] == "default"):
                         destination[value_split[0]] = self.perfect_config_option(value_split[0], value_split[1])
-                else:
-                    return 0, "You're not using the proper formatting. Please refer to the docs.", ''
-            if(is_duplicate(destination['hostname'])):
+            if([dest['hostname'] for dest in self.config['destinations']].__contains__(destination['hostname'])):
                 return 0, "You already entered that hostname!", ''
             self.config['destinations'].append(destination)
             self.init_influx_clients()
