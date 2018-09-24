@@ -1,6 +1,0 @@
-#!/bin/bash
-
-SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
-
-LD_LIBRARY_PATH=${SCRIPT_DIR}/lib
-${SCRIPT_DIR}/bin/ceph-fuse-osiris "$@"

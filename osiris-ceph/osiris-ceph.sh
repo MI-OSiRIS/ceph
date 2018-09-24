@@ -1,61 +1,42 @@
 #!/bin/bash
 
-if [ ! -d ceph-fuse-osiris ]; then
-  wget --no-check-certificate https://repo.osris.org/ceph-fuse-osiris.tar.gz
-  tar -xvzf ceph-fuse-osiris.tar.gz
+SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
+
+SUBDIR="ceph-fuse-osiris"
+TARNAME="ceph-fuse-osiris.tgz"
+REPO="https://repo.osris.org"
+CONFIG_FILE="osiris-ceph.conf"
+
+if [ ! -d "${SCRIPT_DIR}/${SUBDIR}" ]; then
+  wget "${REPO}/${TARNAME}"
+  tar -xvzf "${TARNAME}"
 fi
 
-source osiris-ceph.conf
-EXIT_REQUIRED=false
+source $CONFIG_FILE
 
-if [ -z $MON_ADDRESS ]; then
-  echo "Mon address not set."
-  EXIT_REQUIRED=true
+CONFIG=(MON_ADDRESS OSIRIS_UID OSIRIS_GID OSIRIS_GROUPS KEYRING ID FSROOT MOUNTPOINT)
+CONFIG_MISSING=false
+
+for V in ${CONFIG[@]}; do
+  if [ -z "${!V}" ]; then
+    echo "$V not set in $CONFIG_FILE"
+    CONFIG_MISSING=true
+  fi
+done
+
+if [ $CONFIG_MISSING = true ]; then
+  echo "ERROR: Missing required configuration setting(s)"
+  exit 1
 fi
 
-if [ -z $OSIRIS_UID ]; then
-  echo "UID not set."
-  EXIT_REQUIRED=true
+if [ ! -d "$MOUNTPOINT" ]; then
+  mkdir "$MOUNTPOINT"
 fi
 
-if [ -z $OSIRIS_GID ]; then
-  echo "GID not set."
-  EXIT_REQUIRED=true
-fi
-
-if [ -z $GROUPS ]; then
-  echo "Groups not set."
-  EXIT_REQUIRED=true
-fi
-
-if [ -z $KEYRING ]; then
-  echo "Keyring path not set."
-  EXIT_REQUIRED=true
-fi
-
-if [ -z $ID ]; then
-  echo "Client ID not set."
-  EXIT_REQUIRED=true
-fi
-
-if [ -z $MOUNT ]; then
-  echo "Mount location not set.s."
-  EXIT_REQUIRED=true
-fi
-
-if [ ! -z @1 ]; then
-  MOUNTPOINT=@1
-fi
-
-if [ -z $MOUNTPOINT ]; then
-  echo "Mountpoint not set."
-  EXIT_REQUIRED=true
-fi
-
-if [ $EXIT_REQUIRED = true ]; then
-  echo "Exiting without running ceph-fuse-osiris."
-  exit(1)
-fi
-
-# echo "ceph-fuse-osiris/ceph-fuse-osiris -m testmon.osris.org --uid=$OSIRIS_UID --gid=$OSIRIS_GID --groups=$OSIRIS_GROUPS -k $KEYRING --fuse-allow-other=false --id $ID --client_try_dentry_invalidate=true --log_file=cephfs-osiris.log -r $MOUNT --fuse_default_permissions=0 --client_acl_type=posix_acl --admin_socket=cephfs-osiris.asok $MOUNTPOINT"echo "ceph-fuse-osiris/ceph-fuse-osiris -m testmon.osris.org --uid=$OSIRIS_UID --gid=$OSIRIS_GID --groups=$OSIRIS_GROUPS -k $KEYRING --fuse-allow-other=false --id $ID --client_try_dentry_invalidate=true --log_file=cephfs-osiris.log -r $MOUNT --fuse_default_permissions=0 --client_acl_type=posix_acl --admin_socket=cephfs-osiris.asok $MOUNTPOINT"
-ceph-fuse-osiris/ceph-fuse-osiris -m testmon.osris.org --uid=$OSIRIS_UID --gid=$OSIRIS_GID --groups=$OSIRIS_GROUPS -k $KEYRING --fuse-allow-other=false --id $ID --client_try_dentry_invalidate=true --log_file=cephfs-osiris.log -r $MOUNT --fuse_default_permissions=0 --client_acl_type=posix_acl --admin_socket=cephfs-osiris.asok $MOUNTPOINT
+${SCRIPT_DIR}/${SUBDIR}/ceph-fuse-osiris -m $MON_ADDRESS \
+--uid=$OSIRIS_UID --gid=$OSIRIS_GID --groups=$OSIRIS_GROUPS \
+-k $KEYRING --id $ID \
+--fuse-allow-other=false  --client_try_dentry_invalidate=true \
+--log_file=cephfs-osiris.log --admin_socket=cephfs-osiris.asok --conf=/dev/null \
+--fuse_default_permissions=0 --client_acl_type=posix_acl \
+--client_mountpoint=$FSROOT $MOUNTPOINT

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# Environmental setup script for ceph-fuse-osiris
+# Required to set library path when running self-contained installation
+
+SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
+
+LD_LIBRARY_PATH=${SCRIPT_DIR}/lib ${SCRIPT_DIR}/bin/ceph-fuse-osiris "$@"
