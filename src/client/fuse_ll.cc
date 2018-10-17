@@ -36,6 +36,8 @@
 #include "include/cephfs/ceph_statx.h"
 
 #include "fuse_ll.h"
+#include <fuse.h>
+#include <fuse_lowlevel.h>
 
 #define dout_context g_ceph_context
 
@@ -64,6 +66,94 @@ static dev_t new_decode_dev(uint32_t dev)
 	unsigned minor = (dev & 0xff) | ((dev >> 12) & 0xfff00);
 	return MKDEV(major, minor);
 }
+
+/*
+struct fuse_req {
+  struct fuse_session *se;
+  uint64_t unique;
+  int ctr;
+  pthread_mutex_t lock;
+  struct fuse_ctx ctx;
+  struct fuse_chan *ch;
+  gid_t* server_groups;
+  size_t server_ngroups;
+  int interrupted;
+  unsigned int ioctl_64bit : 1;
+  union {
+    struct {
+      uint64_t unique;
+    } i;
+    struct {
+      fuse_interrupt_func_t func;
+      void *data;
+    } ni;
+  } u;
+  struct fuse_req *next;
+  struct fuse_req *prev;
+};
+
+*/
+
+struct fuse_req {
+  struct fuse_session *se;
+  uint64_t unique;
+  int ctr;
+  pthread_mutex_t lock;
+  struct fuse_ctx ctx;
+  struct fuse_chan *ch;
+  int interrupted;
+  unsigned int ioctl_64bit : 1;
+  union {
+    struct {
+      uint64_t unique;
+    } i;
+    struct {
+      fuse_interrupt_func_t func;
+      void *data;
+    } ni;
+  } u;
+  struct fuse_req *next;
+  struct fuse_req *prev;
+};
+
+class CephFuse::Handle {
+public:
+  Handle(Client *c, int fd);
+  ~Handle();
+
+  int init(int argc, const char *argv[]);
+  int start();
+  int loop();
+  void finalize();
+
+  uint64_t fino_snap(uint64_t fino);
+  uint64_t make_fake_ino(inodeno_t ino, snapid_t snapid);
+  Inode * iget(fuse_ino_t fino);
+  void iput(Inode *in);
+  void update_req_perms(fuse_req_t&);
+  void set_perms(UserPerm& perms_);
+
+  int fd_on_success;
+  Client *client;
+
+  struct fuse_chan *ch;
+  struct fuse_session *se;
+  char *mountpoint;
+
+  Mutex stag_lock;
+  int last_stag;
+
+  ceph::unordered_map<uint64_t,int> snap_stag_map;
+  ceph::unordered_map<int,uint64_t> stag_snap_map;
+
+  UserPerm perms;
+
+  pthread_key_t fuse_req_key = 0;
+  void set_fuse_req(fuse_req_t);
+  fuse_req_t get_fuse_req();
+
+  struct fuse_args args;
+};
 
 static int getgroups(fuse_req_t req, gid_t **sgids)
 {
@@ -94,10 +184,21 @@ static int getgroups(fuse_req_t req, gid_t **sgids)
 
 static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
 {
-  if (req->server_ngroups > 0) {
-    perms.init_gids(req->server_groups, req->server_ngroups);
+
+  CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
+  
+  gid_t *gids = NULL;
+  int count = cfuse->perms.get_gids(gids&);
+  //if (req->server_ngroups > 0) {
+  
+  //new (std::nothrow) gid_t[count];
+  //const gid_t *gids = NULL;
+  //gids_i = const_cast<gid_t*>(gids);
+  //perms.init_gids(gids_i, count);
+    //perms.init_gids(req->server_groups, req->server_ngroups);
     return;
-  }
+  //}
+  
   if (g_conf->get_val<bool>("fuse_set_user_groups")) {
     gid_t *gids = NULL;
     int count = getgroups(req, &gids);
@@ -111,10 +212,13 @@ static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
   }
 }
 
-
 void CephFuse::Handle::update_req_perms(fuse_req_t& req) {
+  // this should be keyed to a flag to avoid doing it if we didn't set client uid/gid manually
+
   req->ctx.uid = perms.uid();
   req->ctx.gid = perms.gid();
+  
+  /*
   if (req->server_ngroups > 0) {
     delete[] req->server_groups;
   }
@@ -124,12 +228,22 @@ void CephFuse::Handle::update_req_perms(fuse_req_t& req) {
   for (size_t i = 0; i < req->server_ngroups; ++i) {
     req->server_groups[i] = gids_tmp[i]; 
   }
+  */
 }
 
 static CephFuse::Handle *fuse_ll_req_prepare(fuse_req_t req)
 {
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
-  cfuse->update_req_perms(req);
+
+  // I don't see any way this can work without replacing the uid/gid in the request that will eventually be sent to server (??)
+  // Likely I don't really understand this either
+
+  req->ctx.uid = cfuse->perms.uid();
+  req->ctx.uid = cfuse->perms.gid();
+
+
+  
+  // cfuse->update_req_perms(req);
   cfuse->set_fuse_req(req);
   return cfuse;
 }
@@ -141,6 +255,7 @@ static void fuse_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
   struct fuse_entry_param fe;
   Inode *i2, *i1 = cfuse->iget(parent); // see below
   int r;
+
   UserPerm perms(ctx->uid, ctx->gid);
   get_fuse_groups(perms, req);
 

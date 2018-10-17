@@ -76,8 +76,8 @@ public:
     return false;
   }
   int get_gids(const gid_t **_gids) const { *_gids = gids; return gid_count; }
-  gid_t* get_groups() { return gids; }
-  int get_ngroups() { return gid_count; }
+  //gid_t* get_groups() { return gids; }
+  //int get_ngroups() { return gid_count; }
   void init_gids(gid_t* _gids, int count) {
     gids = _gids;
     gid_count = count;
