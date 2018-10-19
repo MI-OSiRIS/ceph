@@ -186,15 +186,29 @@ static void get_fuse_groups(UserPerm& perms, fuse_req_t req)
 {
 
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
+
+  perms = cfuse->perms;
+
+  return;
   
-  gid_t *gids = NULL;
-  int count = cfuse->perms.get_gids(gids&);
+  const gid_t *gids = NULL;
+  int count = cfuse->perms.get_gids(&gids);
+
+  // bmeekhof temporary debug
+  derr << __func__ << ": get_gids count: " << count << "group sample: " << gids[2] << dendl;
+
   //if (req->server_ngroups > 0) {
+
+  // copy const object to new one  
+  gid_t *nc_gids = new (std::nothrow) gid_t[count];
+  *nc_gids = *gids;
+  //
+
+  derr << __func__ << ": nc_gids group sample: " << nc_gids[2] << ":" << nc_gids[15] << dendl;
+
+  //nc_gids = gids;
+  perms.init_gids(nc_gids, count);
   
-  //new (std::nothrow) gid_t[count];
-  //const gid_t *gids = NULL;
-  //gids_i = const_cast<gid_t*>(gids);
-  //perms.init_gids(gids_i, count);
     //perms.init_gids(req->server_groups, req->server_ngroups);
     return;
   //}
@@ -239,7 +253,7 @@ static CephFuse::Handle *fuse_ll_req_prepare(fuse_req_t req)
   // Likely I don't really understand this either
 
   req->ctx.uid = cfuse->perms.uid();
-  req->ctx.uid = cfuse->perms.gid();
+  req->ctx.gid = cfuse->perms.gid();
 
 
   
